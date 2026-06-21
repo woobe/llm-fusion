@@ -1,7 +1,7 @@
 """Tests for the llm-fusion source structure.
 
-Validates that the project root satisfies the Agent Skills spec
-when installed as a skill bundle.
+Validates that the tap-discoverable llm-fusion/ subdirectory satisfies
+the Agent Skills spec when installed as a skill bundle.
 """
 
 import os
@@ -13,12 +13,19 @@ import unittest
 
 
 SKILL_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..")
+    os.path.join(os.path.dirname(__file__), "..", "skills", "llm-fusion")
 )
 
 
 class TestSkillBundle(unittest.TestCase):
     """Validate the source structure as a skill bundle."""
+
+    def test_tap_discovery_layout(self):
+        """Hermes GitHub taps discover skills as top-level dirs containing SKILL.md."""
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        tap_skill_path = os.path.join(repo_root, "skills", "llm-fusion", "SKILL.md")
+        self.assertTrue(os.path.isfile(tap_skill_path),
+                        "tap installs require llm-fusion/SKILL.md, not only root SKILL.md")
 
     def test_skill_dir_exists(self):
         """The skill directory must exist."""

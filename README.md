@@ -311,30 +311,31 @@ you only need to specify what changes per scenario.
 
 ```
 llm-fusion/
-  SKILL.md              # Hermes Agent skill manifest
   README.md             # this file
   LICENSE               # MIT
+  .gitignore
 
-  scripts/
-    pipeline.py         # orchestrator — runs the full pipeline
-    panel.py            # parallel dispatch (6 calls, ThreadPoolExecutor)
-    judge.py            # single & two-stage synthesis
-    cleaner.py          # preamble stripping, dedup, min-word filter
-    classifier.py       # regex + optional LLM scenario classification
-    api_client.py       # urllib-based LLM API client
-    config.py           # YAML config loader, scenario merging
-    fallback.py         # rate limiter, OpenRouter fallback provider
-    output.py           # chat formatting, JSON output saving
-    skill_handler.py    # Hermes Agent trigger handler
-    cli.py              # command-line entry point
-    __main__.py         # python3 -m scripts
-
-  assets/
-    fusion_config.yaml        # full configuration
-    fusion_config.yaml.example  # example (bundled fallback)
+  skills/llm-fusion/    # tap-discoverable Hermes skill bundle
+    SKILL.md            # Hermes Agent skill manifest
+    scripts/
+      pipeline.py       # orchestrator — runs the full pipeline
+      panel.py          # parallel dispatch (6 calls, ThreadPoolExecutor)
+      judge.py          # single & two-stage synthesis
+      cleaner.py        # preamble stripping, dedup, min-word filter
+      classifier.py     # regex + optional LLM scenario classification
+      api_client.py     # urllib-based LLM API client
+      config.py         # YAML config loader, scenario merging
+      fallback.py       # rate limiter, OpenRouter fallback provider
+      output.py         # chat formatting, JSON output saving
+      skill_handler.py  # Hermes Agent trigger handler
+      cli.py            # command-line entry point
+      __main__.py       # python3 -m scripts
+    assets/
+      fusion_config.yaml          # full configuration
+      fusion_config.yaml.example  # example (bundled fallback)
 
   tests/                # 87 unit tests
-  references/           # architecture docs
+  local/                # dev notes, logs, plans
 ```
 
 ---
@@ -344,12 +345,14 @@ llm-fusion/
 ### Run from command line
 
 ```bash
-python3 -m scripts --query "What is 2+2?" --verbose
+PYTHONPATH=skills/llm-fusion python3 -m scripts --query "What is 2+2?" --verbose
 ```
 
 ### Run the pipeline programmatically
 
 ```python
+import sys
+sys.path.insert(0, "skills/llm-fusion")
 from scripts.pipeline import run_pipeline
 result = run_pipeline("What is 2+2?")
 print(result['answer'])
@@ -364,10 +367,10 @@ python3 -m pytest tests/ -v
 ### Install from source (no Hermes required)
 
 ```bash
-cd llm-fusion
+cd /path/to/llm-fusion
 pip install pyyaml
 export OPENCODE_GO_API_KEY=your_key_here
-python3 -m scripts --query "What is 2+2?"
+PYTHONPATH=skills/llm-fusion python3 -m scripts --query "What is 2+2?"
 ```
 
 ---
