@@ -216,3 +216,26 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local / Internal Planning Docs
+local/
+
+# Sandbox — scratch / experiments
+sandbox/
+
+# Python cache
+__pycache__/
+.pytest_cache/
+*.pyc
+*.py[codz]
+
+# Build artifacts
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Fusion output
+fusion-results/
+fusion_output/
+_output/

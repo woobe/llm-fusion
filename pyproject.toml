@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-fusion"
+version = "0.1.0"
+description = "Scenario-aware multi-model fusion pipeline packaged as an Agent Skill"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = ["PyYAML>=6.0"]
+
+[project.scripts]
+llm-fusion = "llm_fusion.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "."]
