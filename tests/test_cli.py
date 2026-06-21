@@ -3,18 +3,29 @@
 import os
 import sys
 import json
-import subprocess
 import unittest
 
 
 class TestCLI(unittest.TestCase):
-    """Test the llm-fusion CLI via subprocess."""
+    """Test the llm-fusion CLI via direct calls."""
 
     def _run(self, *args):
-        """Run llm_fusion.cli as a module and return (returncode, stdout, stderr)."""
-        cmd = [sys.executable, "-m", "llm_fusion"] + list(args)
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-        return proc.returncode, proc.stdout, proc.stderr
+        """Run scripts.cli.main with args and return (returncode, stdout, stderr)."""
+        from io import StringIO
+        from scripts.cli import main
+
+        old_stdout = sys.stdout
+        old_stderr = sys.stderr
+        sys.stdout = StringIO()
+        sys.stderr = StringIO()
+        try:
+            rc = main(list(args))
+            return rc, sys.stdout.getvalue(), sys.stderr.getvalue()
+        except SystemExit as e:
+            return e.code if e.code is not None else 0, sys.stdout.getvalue(), sys.stderr.getvalue()
+        finally:
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
 
     def test_version(self):
         """--version should print version and exit 0."""
@@ -60,6 +71,6 @@ class TestCLI(unittest.TestCase):
 
     def test_import(self):
         """Can import the package and cli module."""
-        import llm_fusion
-        import llm_fusion.cli
-        self.assertTrue(callable(llm_fusion.cli.main))
+        import scripts
+        import scripts.cli
+        self.assertTrue(callable(scripts.cli.main))

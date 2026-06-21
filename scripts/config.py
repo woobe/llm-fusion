@@ -54,19 +54,13 @@ def _discover_config_path():
 
 
 def _find_bundled_example():
-    """Find the bundled example config relative to this package or skill dir."""
+    """Find the bundled example config in this scripts/assets layout."""
+    scripts_dir = os.path.dirname(os.path.abspath(__file__))
     candidates = [
-        # When running from the skill wrapper
-        os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                     "..", "..", ".agents", "skills", "llm-fusion",
-                     "assets", "fusion_config.yaml.example"),
-        # When running from the package (editable install in repo root)
-        os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                     "..", "..", "..", "..", ".agents", "skills", "llm-fusion",
-                     "assets", "fusion_config.yaml.example"),
-        # Direct relative from cwd
-        os.path.join(os.getcwd(), ".agents", "skills", "llm-fusion",
-                     "assets", "fusion_config.yaml.example"),
+        # Repository/skill layout: scripts/ next to assets/.
+        os.path.join(scripts_dir, "..", "assets", "fusion_config.yaml.example"),
+        # Direct relative from cwd when launched from the repo root.
+        os.path.join(os.getcwd(), "assets", "fusion_config.yaml.example"),
     ]
     for c in candidates:
         c = os.path.abspath(c)

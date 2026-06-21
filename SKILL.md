@@ -10,7 +10,7 @@ metadata:
   triggers:
     - pattern: /llm-fusion
       handler: scripts.skill_handler.handle_fusion_trigger
-      description: Run the fusion pipeline. Usage: /llm-fusion <prompt>
+      description: "Run the fusion pipeline. Usage: /llm-fusion <prompt>"
     - pattern: /fusion
       handler: scripts.skill_handler.handle_fusion_trigger
       description: Alias for /llm-fusion

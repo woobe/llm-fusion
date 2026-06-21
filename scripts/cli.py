@@ -1,13 +1,14 @@
 """Portable CLI entry point for llm-fusion.
 
-Provides the canonical argument parser and main() function.
-Both the installed ``llm-fusion`` console script and the skill
-wrapper script delegate here for consistent behaviour.
+All runtime code lives under ``scripts/`` so the skill can run without a
+separate installable Python package.
 """
 
 import argparse
 import json
-import sys
+
+
+VERSION = "0.1.0"
 
 
 def build_parser():
@@ -49,20 +50,18 @@ def build_parser():
 
 
 def main(argv=None):
-    """CLI entry point.  Return exit code (0 for success, 2 for error)."""
+    """CLI entry point. Return exit code (0 for success, 2 for error)."""
     parser = build_parser()
     args = parser.parse_args(argv)
 
     if args.version:
-        from llm_fusion import __version__
-        print(f"llm-fusion {__version__}")
+        print(f"llm-fusion {VERSION}")
         return 0
 
-    # Resolve config path early for dry-run
     if args.config:
         resolved_config = args.config
     else:
-        from llm_fusion.config import _discover_config_path
+        from scripts.config import _discover_config_path
         resolved_config = _discover_config_path()
 
     if args.dry_run:
@@ -79,8 +78,8 @@ def main(argv=None):
     if not args.query:
         parser.error("--query is required (use --dry-run to validate without a query)")
 
-    from llm_fusion.pipeline import run_pipeline
-    from llm_fusion.output import format_for_chat
+    from scripts.pipeline import run_pipeline
+    from scripts.output import format_for_chat
 
     result = run_pipeline(
         args.query,
@@ -93,3 +92,7 @@ def main(argv=None):
     print(output)
 
     return 0 if result.get("success") else 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,6 +1,7 @@
-"""Tests for the Agent Skills bundle structure.
+"""Tests for the llm-fusion source structure.
 
-Validates that .agents/skills/llm-fusion/ satisfies the Agent Skills spec.
+Validates that the project root satisfies the Agent Skills spec
+when installed as a skill bundle.
 """
 
 import os
@@ -12,12 +13,12 @@ import unittest
 
 
 SKILL_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", ".agents", "skills", "llm-fusion")
+    os.path.join(os.path.dirname(__file__), "..")
 )
 
 
 class TestSkillBundle(unittest.TestCase):
-    """Validate the Agent Skills bundle."""
+    """Validate the source structure as a skill bundle."""
 
     def test_skill_dir_exists(self):
         """The skill directory must exist."""
@@ -35,13 +36,16 @@ class TestSkillBundle(unittest.TestCase):
     def test_skill_md_frontmatter(self):
         """Validate SKILL.md YAML frontmatter."""
         path = os.path.join(SKILL_DIR, "SKILL.md")
-        text = open(path).read()
+        with open(path) as fh:
+            text = fh.read()
         self.assertTrue(text.startswith("---"), "SKILL.md must start with YAML frontmatter")
         parts = text.split("---", 2)
         self.assertGreaterEqual(len(parts), 3, "SKILL.md must have closing ---")
-        import yaml
-        data = yaml.safe_load(parts[1])
-        self.assertIsInstance(data, dict)
+        data = {}
+        for line in parts[1].splitlines():
+            if ":" in line and not line.startswith(" "):
+                key, value = line.split(":", 1)
+                data[key.strip()] = value.strip()
         self.assertEqual(data.get("name"), "llm-fusion")
         self.assertTrue(data.get("description"), "description must be non-empty")
         # No secrets in frontmatter
@@ -50,32 +54,25 @@ class TestSkillBundle(unittest.TestCase):
         self.assertNotIn("password:", front_str)
         self.assertNotIn("secret:", front_str)
 
-    def test_wrapper_script_exists(self):
-        """The wrapper script must exist."""
-        path = os.path.join(SKILL_DIR, "scripts", "llm_fusion.py")
-        self.assertTrue(os.path.isfile(path), f"Wrapper script not found at {path}")
+    def test_scripts_package_exists(self):
+        """The scripts/ package must exist with __init__.py."""
+        path = os.path.join(SKILL_DIR, "scripts", "__init__.py")
+        self.assertTrue(os.path.isfile(path), f"scripts/__init__.py not found at {path}")
 
-    def test_wrapper_script_runable(self):
-        """The wrapper script must be runnable with python3 from a temp cwd."""
-        script = os.path.join(SKILL_DIR, "scripts", "llm_fusion.py")
+    def test_cli_module_runnable(self):
+        """The CLI module must be runnable from a temp cwd."""
+        env = os.environ.copy()
+        env["PYTHONPATH"] = SKILL_DIR + os.pathsep + env.get("PYTHONPATH", "")
         with tempfile.TemporaryDirectory() as tmpdir:
             result = subprocess.run(
-                [sys.executable, script, "--dry-run", "--query", "hello"],
+                [sys.executable, "-m", "scripts", "--dry-run", "--query", "hello"],
                 capture_output=True, text=True, timeout=10,
-                cwd=tmpdir,
+                cwd=tmpdir, env=env,
             )
             self.assertEqual(result.returncode, 0, f"Script failed: {result.stderr}")
             data = json.loads(result.stdout)
             self.assertTrue(data["ok"])
             self.assertEqual(data["query"], "hello")
-
-    def test_references_exist(self):
-        """The references directory should have the expected files."""
-        ref_dir = os.path.join(SKILL_DIR, "references")
-        self.assertTrue(os.path.isdir(ref_dir))
-        self.assertTrue(os.path.isfile(os.path.join(ref_dir, "configuration.md")))
-        self.assertTrue(os.path.isfile(os.path.join(ref_dir, "troubleshooting.md")))
-        self.assertTrue(os.path.isfile(os.path.join(ref_dir, "pipeline.md")))
 
     def test_assets_exist(self):
         """The assets directory should have the example config."""

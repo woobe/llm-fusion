@@ -7,32 +7,35 @@ depends on cwd or absolute paths.
 import os
 import tempfile
 import unittest
+import importlib.util
+
+YAML_AVAILABLE = importlib.util.find_spec("yaml") is not None
 
 
 class TestConfigDiscovery(unittest.TestCase):
-    """Test llm_fusion.config config discovery functions."""
+    """Test scripts.config config discovery functions."""
 
     def test_explicit_config_path_wins(self):
         """Explicit path should be used directly."""
-        from llm_fusion.config import load_config
+        from scripts.config import load_config
         cfg = load_config("/tmp/nonexistent_cfg_xyz.yaml")
         self.assertEqual(cfg, {})
 
+    @unittest.skipIf(not YAML_AVAILABLE, "PyYAML is not installed")
     def test_env_var_wins_over_cwd(self):
         """LLM_FUSION_CONFIG env var should take priority."""
-        import yaml
-        from llm_fusion.config import load_config
+        from scripts.config import load_config
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # Write a config file at the env var path
             env_path = os.path.join(tmpdir, "env_config.yaml")
             with open(env_path, "w") as f:
-                yaml.dump({"test_key": "from_env"}, f)
+                f.write("test_key: from_env\n")
 
             # Write a different config at cwd (should NOT be picked)
             cwd_path = os.path.join(tmpdir, "fusion_config.yaml")
             with open(cwd_path, "w") as f:
-                yaml.dump({"test_key": "from_cwd"}, f)
+                f.write("test_key: from_cwd\n")
 
             old_env = os.environ.pop("LLM_FUSION_CONFIG", None)
             try:
@@ -52,17 +55,17 @@ class TestConfigDiscovery(unittest.TestCase):
                 else:
                     os.environ.pop("LLM_FUSION_CONFIG", None)
 
+    @unittest.skipIf(not YAML_AVAILABLE, "PyYAML is not installed")
     def test_cwd_config_discovered(self):
         """Config in cwd should be discovered."""
-        import yaml
-        from llm_fusion.config import load_config
+        from scripts.config import load_config
 
         old_env = os.environ.pop("LLM_FUSION_CONFIG", None)
         try:
             with tempfile.TemporaryDirectory() as tmpdir:
                 cwd_path = os.path.join(tmpdir, "fusion_config.yaml")
                 with open(cwd_path, "w") as f:
-                    yaml.dump({"fusion": {"test_key": "from_cwd"}}, f)
+                    f.write("fusion:\n  test_key: from_cwd\n")
 
                 old_cwd = os.getcwd()
                 os.chdir(tmpdir)
@@ -77,7 +80,7 @@ class TestConfigDiscovery(unittest.TestCase):
 
     def test_missing_config_returns_empty(self):
         """Missing config should return {} without raising."""
-        from llm_fusion.config import load_config
+        from scripts.config import load_config
         old_env = os.environ.pop("LLM_FUSION_CONFIG", None)
         try:
             # Use a nonexistent path to avoid bundled example discovery
@@ -87,10 +90,10 @@ class TestConfigDiscovery(unittest.TestCase):
             if old_env is not None:
                 os.environ["LLM_FUSION_CONFIG"] = old_env
 
+    @unittest.skipIf(not YAML_AVAILABLE, "PyYAML is not installed")
     def test_xdg_config_discovered(self):
         """XDG config path should be discovered with monkeypatched env."""
-        import yaml
-        from llm_fusion.config import load_config
+        from scripts.config import load_config
 
         old_env = os.environ.pop("LLM_FUSION_CONFIG", None)
         old_xdg = os.environ.pop("XDG_CONFIG_HOME", None)
@@ -100,7 +103,7 @@ class TestConfigDiscovery(unittest.TestCase):
                 os.makedirs(xdg_dir, exist_ok=True)
                 cfg_path = os.path.join(xdg_dir, "fusion_config.yaml")
                 with open(cfg_path, "w") as f:
-                    yaml.dump({"fusion": {"test_key": "from_xdg"}}, f)
+                    f.write("fusion:\n  test_key: from_xdg\n")
 
                 os.environ["XDG_CONFIG_HOME"] = os.path.join(tmpdir, ".config")
                 old_cwd = os.getcwd()
@@ -119,14 +122,14 @@ class TestConfigDiscovery(unittest.TestCase):
 
     def test_output_dir_discovery_fallback(self):
         """Output dir should fall back to XDG state or gracefully disable."""
-        from llm_fusion.config import _discover_config_path  # noqa
+        from scripts.config import _discover_config_path  # noqa
         # No explicit assert needed — just ensure no crash
         self.assertTrue(True)
 
     def test_no_absolute_home_paths(self):
         """Config discovery must not hardcode /home/joe paths."""
         import inspect
-        from llm_fusion import config as cfg_module
+        from scripts import config as cfg_module
         source = inspect.getsource(cfg_module)
         self.assertNotIn("/home/joe", source,
                          "Config module must not contain hardcoded /home/joe paths")
