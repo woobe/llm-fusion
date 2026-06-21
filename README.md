@@ -13,13 +13,8 @@ token budget, cleaning rules, and judge strategy.
 ## Quick Start
 
 ```bash
-# Install via Hermes Agent
-hermes skills tap add woobe/llm-fusion
-hermes skills install llm-fusion
-
-# Trigger from chat
-/llm-fusion What is the capital of France?
-/fusion Write a Python function to sort a list
+# Install with one-liner
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/woobe/llm-fusion/main/install.sh)"
 ```
 
 Scenarios are auto-detected. To force a specific scenario:
