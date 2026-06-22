@@ -46,19 +46,19 @@ class TestTierConfig(unittest.TestCase):
         }
 
     def test_normalize_tier_default(self):
-        """normalize_tier(None) returns 'low'."""
+        """normalize_tier(None) returns 'low2'."""
         from scripts.config import normalize_tier
-        self.assertEqual(normalize_tier(None), "low")
+        self.assertEqual(normalize_tier(None), "low2")
 
-    def test_normalize_tier_min(self):
-        """normalize_tier('min') returns 'min'."""
+    def test_normalize_tier_low1(self):
+        """normalize_tier('low1') returns 'low1'."""
         from scripts.config import normalize_tier
-        self.assertEqual(normalize_tier("min"), "min")
+        self.assertEqual(normalize_tier("low1"), "low1")
 
-    def test_normalize_tier_low(self):
-        """normalize_tier('low') returns 'low'."""
+    def test_normalize_tier_low2(self):
+        """normalize_tier('low2') returns 'low2'."""
         from scripts.config import normalize_tier
-        self.assertEqual(normalize_tier("low"), "low")
+        self.assertEqual(normalize_tier("low2"), "low2")
 
     def test_normalize_tier_medium(self):
         """normalize_tier('medium') returns 'medium'."""
@@ -66,38 +66,47 @@ class TestTierConfig(unittest.TestCase):
         self.assertEqual(normalize_tier("medium"), "medium")
 
     def test_normalize_tier_invalid_falls_back(self):
-        """normalize_tier('invalid') falls back to 'low'."""
+        """normalize_tier('invalid') falls back to 'low2'."""
         from scripts.config import normalize_tier
-        self.assertEqual(normalize_tier("invalid"), "low")
+        self.assertEqual(normalize_tier("invalid"), "low2")
 
     def test_normalize_tier_empty_string(self):
-        """normalize_tier('') falls back to 'low'."""
+        """normalize_tier('') falls back to 'low2'."""
         from scripts.config import normalize_tier
-        self.assertEqual(normalize_tier(""), "low")
+        self.assertEqual(normalize_tier(""), "low2")
 
     def test_tier_map_has_expected_tiers(self):
-        """TIER_MAP has min, low, medium, high."""
+        """TIER_MAP has low1, low2, low3, medium, high."""
         from scripts.config import TIER_MAP
-        self.assertIn("min", TIER_MAP)
-        self.assertIn("low", TIER_MAP)
+        self.assertIn("low1", TIER_MAP)
+        self.assertIn("low2", TIER_MAP)
+        self.assertIn("low3", TIER_MAP)
         self.assertIn("medium", TIER_MAP)
         self.assertIn("high", TIER_MAP)
 
-    def test_tier_map_min_counts(self):
-        """min tier: 2 deepseek + 1 mimo = 3 total calls."""
+    def test_tier_map_low1_counts(self):
+        """low1 tier: 1 deepseek + 1 mimo = 2 total calls."""
         from scripts.config import TIER_MAP
-        counts = TIER_MAP["min"]
-        self.assertEqual(counts.get("deepseek-v4-flash"), 2)
+        counts = TIER_MAP["low1"]
+        self.assertEqual(counts.get("deepseek-v4-flash"), 1)
         self.assertEqual(counts.get("mimo-v2.5"), 1)
-        self.assertEqual(sum(counts.values()), 3)
+        self.assertEqual(sum(counts.values()), 2)
 
-    def test_tier_map_low_counts(self):
-        """low tier: 2 deepseek + 2 mimo = 4 total calls."""
+    def test_tier_map_low2_counts(self):
+        """low2 tier: 2 deepseek + 2 mimo = 4 total calls."""
         from scripts.config import TIER_MAP
-        counts = TIER_MAP["low"]
+        counts = TIER_MAP["low2"]
         self.assertEqual(counts.get("deepseek-v4-flash"), 2)
         self.assertEqual(counts.get("mimo-v2.5"), 2)
         self.assertEqual(sum(counts.values()), 4)
+
+    def test_tier_map_low3_counts(self):
+        """low3 tier: 3 deepseek + 3 mimo = 6 total calls."""
+        from scripts.config import TIER_MAP
+        counts = TIER_MAP["low3"]
+        self.assertEqual(counts.get("deepseek-v4-flash"), 3)
+        self.assertEqual(counts.get("mimo-v2.5"), 3)
+        self.assertEqual(sum(counts.values()), 6)
 
     def test_tier_map_medium_counts(self):
         """medium tier: 1 deepseek + 1 mimo + 1 deepseek-v4-pro = 3 total calls."""
@@ -153,17 +162,17 @@ class TestScenarioConfigWithTier(unittest.TestCase):
         """Sum count field across all models."""
         return sum(m.get("count", 0) for m in models)
 
-    def test_min_tier_total_calls(self):
-        """min tier produces 3 total panel calls."""
+    def test_low1_tier_total_calls(self):
+        """low1 tier produces 2 total panel calls."""
         from scripts.config import get_scenario_config
-        cfg = get_scenario_config(self.minimal_config, "general", tier="min")
+        cfg = get_scenario_config(self.minimal_config, "general", tier="low1")
         models = cfg["panel"]["models"]
-        self.assertEqual(self._total_panel_count(models), 3)
+        self.assertEqual(self._total_panel_count(models), 2)
 
-    def test_low_tier_total_calls(self):
-        """low tier produces 4 total panel calls."""
+    def test_low2_tier_total_calls(self):
+        """low2 tier produces 4 total panel calls."""
         from scripts.config import get_scenario_config
-        cfg = get_scenario_config(self.minimal_config, "general", tier="low")
+        cfg = get_scenario_config(self.minimal_config, "general", tier="low2")
         models = cfg["panel"]["models"]
         self.assertEqual(self._total_panel_count(models), 4)
 
@@ -174,28 +183,28 @@ class TestScenarioConfigWithTier(unittest.TestCase):
         models = cfg["panel"]["models"]
         self.assertEqual(self._total_panel_count(models), 3)
 
-    def test_default_tier_low(self):
-        """No tier argument defaults to low (4 calls)."""
+    def test_default_tier_low2(self):
+        """No tier argument defaults to low2 (4 calls)."""
         from scripts.config import get_scenario_config
         cfg = get_scenario_config(self.minimal_config, "general")
         models = cfg["panel"]["models"]
         self.assertEqual(self._total_panel_count(models), 4)
 
-    def test_min_tier_deepseek_count(self):
-        """min tier has deepseek count=2."""
+    def test_low1_tier_deepseek_count(self):
+        """low1 tier has deepseek count=1."""
         from scripts.config import get_scenario_config
-        cfg = get_scenario_config(self.minimal_config, "general", tier="min")
+        cfg = get_scenario_config(self.minimal_config, "general", tier="low1")
         for m in cfg["panel"]["models"]:
             if m["name"] == "deepseek-v4-flash":
-                self.assertEqual(m["count"], 2)
+                self.assertEqual(m["count"], 1)
                 break
         else:
             self.fail("deepseek-v4-flash not found in models")
 
-    def test_min_tier_mimo_count(self):
-        """min tier has mimo count=1."""
+    def test_low1_tier_mimo_count(self):
+        """low1 tier has mimo count=1."""
         from scripts.config import get_scenario_config
-        cfg = get_scenario_config(self.minimal_config, "general", tier="min")
+        cfg = get_scenario_config(self.minimal_config, "general", tier="low1")
         for m in cfg["panel"]["models"]:
             if m["name"] == "mimo-v2.5":
                 self.assertEqual(m["count"], 1)
@@ -218,10 +227,10 @@ class TestScenarioConfigWithTier(unittest.TestCase):
             if m["name"] == "mimo-v2.5":
                 self.assertEqual(m.get("count"), 1)
 
-    def test_minimax_not_in_min_low_or_medium(self):
-        """minimax-m3 should NOT appear in min, low, or medium tiers."""
+    def test_minimax_not_in_low1_low2_low3_or_medium(self):
+        """minimax-m3 should NOT appear in low1, low2, low3, or medium tiers."""
         from scripts.config import get_scenario_config
-        for tier in ("min", "low", "medium"):
+        for tier in ("low1", "low2", "low3", "medium"):
             cfg = get_scenario_config(self.minimal_config, "general", tier=tier)
             names = [m["name"] for m in cfg["panel"]["models"]]
             self.assertNotIn("minimax-m3", names, f"minimax-m3 should not be in {tier} tier")
@@ -290,7 +299,7 @@ class TestScenarioConfigWithTier(unittest.TestCase):
         """Judge config is identical regardless of tier."""
         from scripts.config import get_scenario_config
         cfg_no_tier = get_scenario_config(self.minimal_config, "coding")
-        for tier in ("min", "low", "medium", "high"):
+        for tier in ("low1", "low2", "low3", "medium", "high"):
             cfg_tier = get_scenario_config(self.minimal_config, "coding", tier=tier)
             self.assertEqual(cfg_tier["judge"], cfg_no_tier["judge"],
                              f"Judge config changed for tier={tier}")
@@ -299,7 +308,7 @@ class TestScenarioConfigWithTier(unittest.TestCase):
         """Judge config is identical for general scenario too."""
         from scripts.config import get_scenario_config
         cfg_no_tier = get_scenario_config(self.minimal_config, "general")
-        for tier in ("min", "low", "medium", "high"):
+        for tier in ("low1", "low2", "low3", "medium", "high"):
             cfg_tier = get_scenario_config(self.minimal_config, "general", tier=tier)
             self.assertEqual(cfg_tier["judge"], cfg_no_tier["judge"],
                              f"Judge config changed for tier={tier}")
@@ -367,8 +376,8 @@ class TestPanelTier(unittest.TestCase):
         self.assertFalse(any("minimax-m3" in label for label in labels), labels)
         self.assertFalse(any("qwen3.7-plus" in label for label in labels), labels)
 
-    def test_min_tier_only_three_specs(self):
-        """min tier should produce 3 call specs (2 deepseek, 1 mimo)."""
+    def test_min_tier_only_low1_specs(self):
+        """low1 tier should produce 2 call specs (1 deepseek, 1 mimo)."""
         from scripts.panel import dispatch_panel
 
         config = {
@@ -403,9 +412,9 @@ class TestPanelTier(unittest.TestCase):
             mock_call.return_value = {"success": True, "content": "test",
                                       "reasoning_content": None, "usage": {},
                                       "elapsed": 0.01}
-            result = dispatch_panel("test", "general", config=config, tier="min", max_workers=3)
+            result = dispatch_panel("test", "general", config=config, tier="low1", max_workers=3)
 
-        self.assertEqual(len(result["responses"]), 3)
+        self.assertEqual(len(result["responses"]), 2)
 
     def test_top_k_passed_in_extra_params(self):
         """top_k from model config should be passed via extra_params."""
@@ -523,20 +532,20 @@ class TestCLITier(unittest.TestCase):
             sys.stderr = old_stderr
 
     def test_dry_run_includes_tier_default(self):
-        """Dry-run JSON includes tier field (default low)."""
+        """Dry-run JSON includes tier field (default low2)."""
         import json
         rc, out, _ = self._run("--dry-run", "--query", "test")
         self.assertEqual(rc, 0)
         data = json.loads(out)
         self.assertIn("tier", data)
 
-    def test_dry_run_tier_min(self):
-        """Dry-run with --tier min shows tier=min."""
+    def test_dry_run_tier_low1(self):
+        """Dry-run with --tier low1 shows tier=low1."""
         import json
-        rc, out, _ = self._run("--dry-run", "--query", "test", "--tier", "min")
+        rc, out, _ = self._run("--dry-run", "--query", "test", "--tier", "low1")
         self.assertEqual(rc, 0)
         data = json.loads(out)
-        self.assertEqual(data["tier"], "min")
+        self.assertEqual(data["tier"], "low1")
 
     def test_dry_run_tier_medium(self):
         """Dry-run with --tier medium shows tier=medium."""
@@ -569,16 +578,16 @@ class TestPipelineTier(unittest.TestCase):
     def test_pipeline_accepts_tier(self):
         """run_pipeline accepts tier parameter and includes it in metadata."""
         from scripts.pipeline import run_pipeline
-        result = run_pipeline("What is 2+2?", tier="min")
+        result = run_pipeline("What is 2+2?", tier="low1")
         self.assertIn("metadata", result)
-        self.assertEqual(result["metadata"].get("tier"), "min")
+        self.assertEqual(result["metadata"].get("tier"), "low1")
 
     def test_pipeline_default_tier(self):
-        """run_pipeline defaults tier to low in metadata."""
+        """run_pipeline defaults tier to low2 in metadata."""
         from scripts.pipeline import run_pipeline
         result = run_pipeline("What is 2+2?")
         self.assertIn("metadata", result)
-        self.assertEqual(result["metadata"].get("tier"), "low")
+        self.assertEqual(result["metadata"].get("tier"), "low2")
 
 
 if __name__ == "__main__":

@@ -802,13 +802,17 @@ class TestTierResolution(unittest.TestCase):
                         },
                     },
                     "tiers": {
-                        "min": [
+                        "low1": [
                             {"name": "deepseek-v4-flash", "count": 1},
                             {"name": "mimo-v2.5", "count": 1},
                         ],
-                        "low": [
+                        "low2": [
                             {"name": "deepseek-v4-flash", "count": 2},
                             {"name": "mimo-v2.5", "count": 2},
+                        ],
+                        "low3": [
+                            {"name": "deepseek-v4-flash", "count": 3},
+                            {"name": "mimo-v2.5", "count": 3},
                         ],
                         "medium": [
                             {"name": "deepseek-v4-flash", "count": 1},
@@ -877,11 +881,11 @@ class TestTierResolution(unittest.TestCase):
 
     # --- resolve_tier_models tests ---
 
-    def test_resolve_min_tier(self):
-        """min tier returns 2 models (1 deepseek + 1 mimo)."""
+    def test_resolve_low1_tier(self):
+        """low1 tier returns 2 models (1 deepseek + 1 mimo)."""
         from scripts.config import resolve_tier_models
         panel_cfg = self.tiered_config["default"]["panel"]
-        models = resolve_tier_models(panel_cfg, "min")
+        models = resolve_tier_models(panel_cfg, "low1")
         self.assertEqual(len(models), 2)
         names = [m["name"] for m in models]
         self.assertEqual(names, ["deepseek-v4-flash", "mimo-v2.5"])
@@ -893,13 +897,13 @@ class TestTierResolution(unittest.TestCase):
         self.assertEqual(models[0]["top_p"], 0.9)
         self.assertEqual(models[1]["top_p"], 0.95)
 
-    def test_resolve_low_tier(self):
-        """low tier returns 4 models (2 deepseek + 2 mimo)."""
+    def test_resolve_low2_tier(self):
+        """low2 tier returns 2 model entries (counts 2 each)."""
         from scripts.config import resolve_tier_models
         panel_cfg = self.tiered_config["default"]["panel"]
-        models = resolve_tier_models(panel_cfg, "low")
+        models = resolve_tier_models(panel_cfg, "low2")
         self.assertEqual(len(models), 2)
-        # low has 2 entries, each with count=2 → expands in dispatch
+        # low2 has 2 entries, each with count=2 → expands in dispatch
         names = [m["name"] for m in models]
         self.assertEqual(names, ["deepseek-v4-flash", "mimo-v2.5"])
         self.assertEqual(models[0]["count"], 2)
@@ -941,7 +945,7 @@ class TestTierResolution(unittest.TestCase):
         self.assertEqual(models[2]["reasoning_effort"], "high")
 
     def test_resolve_unknown_tier_falls_back_to_low(self):
-        """Unknown tier name falls back to 'low'."""
+        """Unknown tier name falls back to 'low2'."""
         from scripts.config import resolve_tier_models
         panel_cfg = self.tiered_config["default"]["panel"]
         models = resolve_tier_models(panel_cfg, "nonexistent")
@@ -953,30 +957,30 @@ class TestTierResolution(unittest.TestCase):
         """No tiers key → TIER_MAP overrides counts on legacy models list."""
         from scripts.config import resolve_tier_models
         panel_cfg = self.legacy_config["default"]["panel"]
-        models = resolve_tier_models(panel_cfg, "low")
+        models = resolve_tier_models(panel_cfg, "low2")
         self.assertEqual(len(models), 2)
         self.assertEqual(models[0]["name"], "deepseek-v4-flash")
-        # Count overridden by TIER_MAP["low"] (2 each)
+        # Count overridden by TIER_MAP["low2"] (2 each)
         self.assertEqual(models[0]["count"], 2)
         self.assertEqual(models[1]["name"], "mimo-v2.5")
         self.assertEqual(models[1]["count"], 2)
 
-    def test_resolve_legacy_models_min_tier(self):
-        """min tier with legacy config yields count=2 deepseek + 1 mimo (2 models, 3 calls)."""
+    def test_resolve_legacy_models_low1_tier(self):
+        """low1 tier with legacy config yields count=1 deepseek + 1 mimo (2 models, 2 calls)."""
         from scripts.config import resolve_tier_models
         panel_cfg = self.legacy_config["default"]["panel"]
-        models = resolve_tier_models(panel_cfg, "min")
+        models = resolve_tier_models(panel_cfg, "low1")
         self.assertEqual(len(models), 2)
         self.assertEqual(models[0]["name"], "deepseek-v4-flash")
-        self.assertEqual(models[0]["count"], 2)
+        self.assertEqual(models[0]["count"], 1)
         self.assertEqual(models[1]["name"], "mimo-v2.5")
         self.assertEqual(models[1]["count"], 1)
 
     def test_resolve_empty_panel(self):
-        """Empty panel config returns TIER_MAP low defaults."""
+        """Empty panel config returns TIER_MAP low2 defaults."""
         from scripts.config import resolve_tier_models
-        models = resolve_tier_models({}, "low")
-        # Falls back to TIER_MAP["low"] defaults
+        models = resolve_tier_models({}, "low2")
+        # Falls back to TIER_MAP["low2"] defaults
         self.assertEqual(len(models), 2)
         self.assertEqual(models[0]["name"], "deepseek-v4-flash")
         self.assertEqual(models[0]["count"], 2)
@@ -986,7 +990,7 @@ class TestTierResolution(unittest.TestCase):
     def test_get_scenario_config_with_tier(self):
         """get_scenario_config with tier param returns correct model count."""
         from scripts.config import get_scenario_config
-        cfg = get_scenario_config(self.tiered_config, "coding", tier="min")
+        cfg = get_scenario_config(self.tiered_config, "coding", tier="low1")
         models = cfg["panel"]["models"]
         self.assertEqual(len(models), 2)
         # Scenario override applied
@@ -998,11 +1002,11 @@ class TestTierResolution(unittest.TestCase):
     def test_get_scenario_config_legacy(self):
         """Legacy config (no tiers) applies TIER_MAP counts with tier param."""
         from scripts.config import get_scenario_config
-        cfg = get_scenario_config(self.legacy_config, "general", tier="low")
+        cfg = get_scenario_config(self.legacy_config, "general", tier="low2")
         self.assertIn("panel", cfg)
         models = cfg["panel"]["models"]
         self.assertEqual(len(models), 2)
-        # Count overridden by TIER_MAP["low"] (2 each)
+        # Count overridden by TIER_MAP["low2"] (2 each)
         self.assertEqual(models[0]["count"], 2)
         self.assertEqual(models[1]["count"], 2)
 

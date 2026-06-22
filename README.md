@@ -10,6 +10,33 @@ token budget, cleaning rules, and judge strategy.
 
 ---
 
+## Example
+
+```bash
+llm-fusion low3 Explain Numerai's stake-weighted meta-model to a 5-yo in 5 lines
+```
+
+Final answer:
+
+- Numerai is a big guessing game where people try to predict the stock market.
+- Players put their own money or tokens on their guess to show how confident they are.
+- A special "meta-model" takes everyone's guesses and mixes them into one final answer.
+- It listens the most to the people who bet the most, because they are the most sure.
+- This makes the team's final guess much stronger, smarter, and harder to trick than any single guess alone.
+
+─── Panel: 6/6 ok (3 ds4flash + 3 mimo) in 8.1s | Judge: single-stage in 33.9s | Total: 72s ───
+
+Panel responses:
+
+- deepseek-v4-flash #1 — Guessing game about money movements. People put their own money behind guesses to show confidence. Meta-model mixes them, listens more to those who stake. Result is stronger and harder to trick.
+- deepseek-v4-flash #2 — Big guessing game about stocks. Confident people put their own money in. Their guesses count more. Combined final guess is smarter and more reliable.
+- deepseek-v4-flash #3 — Guessing game about stocks. People use tokens to show confidence. Meta-model pays more attention to bigger token holders. Everyone's guess mixed together is smarter.
+- mimo-v2.5 #1 — Kids making guesses, some put toys on the line. The ones who risk their toys get heard more. Their clues mixed together make a super-smart guess.
+- mimo-v2.5 #2 — Prediction contest. People put allowance money on their guesses. The more they bet, the more it counts. Extra weight for brave bettors.
+- mimo-v2.5 #3 — Group project guessing stocks. People bet allowance on their predictions. Those who've been right before and bet more get more weight.
+
+---
+
 ## Quick Start
 
 ```bash
@@ -306,7 +333,7 @@ llm-fusion/
   README.md, LICENSE, .gitignore
   skills/llm-fusion/    # skill bundle
     SKILL.md, scripts/ (12 modules), assets/ (config)
-  tests/                # 87 unit tests
+  tests/                # 143 unit tests
   local/                # dev notes
 ```
 
