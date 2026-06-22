@@ -150,7 +150,7 @@ def _build_call_specs(models_list, user_prompt, config):
     return call_specs
 
 
-def dispatch_panel(query, scenario_id, config=None, max_workers=None, tier=None):
+def dispatch_panel(query, scenario_id, config=None, max_workers=None, tier=None, progress_callback=None):
     """Dispatch parallel panel calls for a given scenario.
 
     Parameters
@@ -167,6 +167,11 @@ def dispatch_panel(query, scenario_id, config=None, max_workers=None, tier=None)
         with a minimum of 1.
     tier : str or None
         Panel tier (``min``, ``low``, ``medium``, or ``None`` for default).
+    progress_callback : callable or None
+        Optional callback invoked with structured event dicts:
+        ``panel_started`` (total, max_workers) and
+        ``panel_call_completed`` (completed, total, label, success, elapsed, error).
+        Must never raise.
 
     Returns
     -------
@@ -240,6 +245,17 @@ def dispatch_panel(query, scenario_id, config=None, max_workers=None, tier=None)
         if max_workers < 1:
             max_workers = 1
 
+    # Emit panel_started event before submitting
+    if progress_callback:
+        try:
+            progress_callback({
+                "phase": "panel_started",
+                "total": len(call_specs),
+                "max_workers": max_workers,
+            })
+        except Exception:
+            pass
+
     # Execute calls in parallel via ThreadPoolExecutor
     futures = {}
 
@@ -287,13 +303,15 @@ def dispatch_panel(query, scenario_id, config=None, max_workers=None, tier=None)
             future = executor.submit(_do_call, spec)
             futures[future] = spec["label"]
 
+        total = len(call_specs)
+        completed = 0
         for future in as_completed(futures):
             try:
                 response = future.result()
                 result["responses"].append(response)
             except Exception as exc:
                 label = futures.get(future, "unknown")
-                result["responses"].append({
+                response = {
                     "label": label,
                     "model": "unknown",
                     "success": False,
@@ -302,7 +320,22 @@ def dispatch_panel(query, scenario_id, config=None, max_workers=None, tier=None)
                     "error": f"Future exception: {exc}",
                     "usage": None,
                     "elapsed": 0,
-                })
+                }
+                result["responses"].append(response)
+            completed += 1
+            if progress_callback:
+                try:
+                    progress_callback({
+                        "phase": "panel_call_completed",
+                        "completed": completed,
+                        "total": total,
+                        "label": response.get("label", "?"),
+                        "success": response.get("success", False),
+                        "elapsed": response.get("elapsed", 0),
+                        "error": response.get("error"),
+                    })
+                except Exception:
+                    pass  # callback must never raise
 
     # Sort responses by label for consistent ordering
     result["responses"].sort(key=lambda r: r.get("label", ""))
