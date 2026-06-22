@@ -68,7 +68,7 @@ def _derive_timeout(model_entry, timeout_cfg):
         thinking_type = thinking.get("type", "")
         uses_thinking = thinking_type in ("adaptive", "enabled")
 
-    if uses_thinking or model_entry.get("reasoning_effort"):
+    if uses_thinking or model_entry.get("reasoning_effort") or model_entry.get("reasoning_mode"):
         raw_timeout *= 1.5
 
     timeout = max(floor, int(raw_timeout))
@@ -110,6 +110,7 @@ def _build_call_specs(models_list, user_prompt, config):
         max_completion = model_entry.get("max_completion_tokens")
         thinking = model_entry.get("thinking")
         reasoning_effort = model_entry.get("reasoning_effort")
+        reasoning_mode = model_entry.get("reasoning_mode")
         top_k = model_entry.get("top_k")
 
         # Derive per-model adaptive timeout
@@ -138,6 +139,8 @@ def _build_call_specs(models_list, user_prompt, config):
                 extra["thinking"] = thinking
             if reasoning_effort:
                 extra["reasoning_effort"] = reasoning_effort
+            if reasoning_mode:
+                extra["reasoning_mode"] = reasoning_mode
             if top_k is not None:
                 extra["top_k"] = top_k
             if extra:

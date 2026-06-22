@@ -35,6 +35,12 @@ fusion:
           top_k: 20
           reasoning_effort: high
           max_tokens: 2048
+        - name: deepseek-v4-pro
+          count: 0
+          temp: 0.9
+          top_p: 0.95
+          reasoning_mode: high
+          max_completion_tokens: 2048
     judge:
       model: deepseek-v4-flash
       temp: 0.0

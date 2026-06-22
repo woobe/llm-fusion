@@ -76,19 +76,20 @@ class TestTierConfig(unittest.TestCase):
         self.assertEqual(normalize_tier(""), "low")
 
     def test_tier_map_has_expected_tiers(self):
-        """TIER_MAP has min, low, medium."""
+        """TIER_MAP has min, low, medium, high."""
         from scripts.config import TIER_MAP
         self.assertIn("min", TIER_MAP)
         self.assertIn("low", TIER_MAP)
         self.assertIn("medium", TIER_MAP)
+        self.assertIn("high", TIER_MAP)
 
     def test_tier_map_min_counts(self):
-        """min tier: 1 deepseek + 1 mimo = 2 total calls."""
+        """min tier: 2 deepseek + 1 mimo = 3 total calls."""
         from scripts.config import TIER_MAP
         counts = TIER_MAP["min"]
-        self.assertEqual(counts.get("deepseek-v4-flash"), 1)
+        self.assertEqual(counts.get("deepseek-v4-flash"), 2)
         self.assertEqual(counts.get("mimo-v2.5"), 1)
-        self.assertEqual(sum(counts.values()), 2)
+        self.assertEqual(sum(counts.values()), 3)
 
     def test_tier_map_low_counts(self):
         """low tier: 2 deepseek + 2 mimo = 4 total calls."""
@@ -99,13 +100,25 @@ class TestTierConfig(unittest.TestCase):
         self.assertEqual(sum(counts.values()), 4)
 
     def test_tier_map_medium_counts(self):
-        """medium tier: 1 deepseek + 1 minimax + 1 qwen = 3 total calls."""
+        """medium tier: 1 deepseek + 1 mimo + 1 deepseek-v4-pro = 3 total calls."""
         from scripts.config import TIER_MAP
         counts = TIER_MAP["medium"]
         self.assertEqual(counts.get("deepseek-v4-flash"), 1)
-        self.assertNotIn("mimo-v2.5", counts)
+        self.assertEqual(counts.get("mimo-v2.5"), 1)
+        self.assertEqual(counts.get("deepseek-v4-pro"), 1)
+        self.assertNotIn("minimax-m3", counts)
+        self.assertNotIn("qwen3.7-plus", counts)
+        self.assertEqual(sum(counts.values()), 3)
+
+    def test_tier_map_high_counts(self):
+        """high tier: 1 deepseek-v4-pro + 1 minimax-m3 + 1 qwen3.7-plus = 3 total calls."""
+        from scripts.config import TIER_MAP
+        counts = TIER_MAP["high"]
+        self.assertEqual(counts.get("deepseek-v4-pro"), 1)
         self.assertEqual(counts.get("minimax-m3"), 1)
         self.assertEqual(counts.get("qwen3.7-plus"), 1)
+        self.assertNotIn("deepseek-v4-flash", counts)
+        self.assertNotIn("mimo-v2.5", counts)
         self.assertEqual(sum(counts.values()), 3)
 
 
@@ -141,11 +154,11 @@ class TestScenarioConfigWithTier(unittest.TestCase):
         return sum(m.get("count", 0) for m in models)
 
     def test_min_tier_total_calls(self):
-        """min tier produces 2 total panel calls."""
+        """min tier produces 3 total panel calls."""
         from scripts.config import get_scenario_config
         cfg = get_scenario_config(self.minimal_config, "general", tier="min")
         models = cfg["panel"]["models"]
-        self.assertEqual(self._total_panel_count(models), 2)
+        self.assertEqual(self._total_panel_count(models), 3)
 
     def test_low_tier_total_calls(self):
         """low tier produces 4 total panel calls."""
@@ -169,12 +182,12 @@ class TestScenarioConfigWithTier(unittest.TestCase):
         self.assertEqual(self._total_panel_count(models), 4)
 
     def test_min_tier_deepseek_count(self):
-        """min tier has deepseek count=1."""
+        """min tier has deepseek count=2."""
         from scripts.config import get_scenario_config
         cfg = get_scenario_config(self.minimal_config, "general", tier="min")
         for m in cfg["panel"]["models"]:
             if m["name"] == "deepseek-v4-flash":
-                self.assertEqual(m["count"], 1)
+                self.assertEqual(m["count"], 2)
                 break
         else:
             self.fail("deepseek-v4-flash not found in models")
@@ -190,30 +203,48 @@ class TestScenarioConfigWithTier(unittest.TestCase):
         else:
             self.fail("mimo-v2.5 not found in models")
 
-    def test_medium_tier_includes_qwen_and_no_mimo(self):
-        """medium tier includes qwen3.7-plus and disables mimo-v2.5."""
+    def test_medium_tier_includes_deepseek_v4_pro_and_mimo(self):
+        """medium tier includes deepseek-v4-pro and mimo-v2.5 (count=1 each)."""
         from scripts.config import get_scenario_config
         cfg = get_scenario_config(self.minimal_config, "general", tier="medium")
         models = cfg["panel"]["models"]
         names = [m["name"] for m in models]
-        self.assertIn("qwen3.7-plus", names)
-        self.assertIn("minimax-m3", names)
+        self.assertIn("deepseek-v4-pro", names)
+        self.assertIn("mimo-v2.5", names)
+        self.assertIn("deepseek-v4-flash", names)
         for m in models:
+            if m["name"] == "deepseek-v4-pro":
+                self.assertEqual(m.get("count"), 1)
             if m["name"] == "mimo-v2.5":
-                self.assertEqual(m.get("count"), 0)
+                self.assertEqual(m.get("count"), 1)
 
-    def test_minimax_not_in_min_or_low(self):
-        """minimax-m3 should NOT appear in min or low tiers."""
+    def test_minimax_not_in_min_low_or_medium(self):
+        """minimax-m3 should NOT appear in min, low, or medium tiers."""
         from scripts.config import get_scenario_config
-        for tier in ("min", "low"):
+        for tier in ("min", "low", "medium"):
             cfg = get_scenario_config(self.minimal_config, "general", tier=tier)
             names = [m["name"] for m in cfg["panel"]["models"]]
             self.assertNotIn("minimax-m3", names, f"minimax-m3 should not be in {tier} tier")
 
-    def test_minimax_defaults_sensible(self):
-        """minimax-m3 gets sensible default parameters."""
+    def test_high_tier_includes_minimax_and_qwen(self):
+        """high tier includes minimax-m3, qwen3.7-plus, and deepseek-v4-pro (deepseek disabled)."""
         from scripts.config import get_scenario_config
-        cfg = get_scenario_config(self.minimal_config, "general", tier="medium")
+        cfg = get_scenario_config(self.minimal_config, "general", tier="high")
+        names = [m["name"] for m in cfg["panel"]["models"]]
+        self.assertIn("minimax-m3", names)
+        self.assertIn("qwen3.7-plus", names)
+        self.assertIn("deepseek-v4-pro", names)
+        # deepseek-v4-flash and mimo-v2.5 are in the list but disabled
+        for m in cfg["panel"]["models"]:
+            if m["name"] == "deepseek-v4-flash":
+                self.assertEqual(m.get("count"), 0)
+            if m["name"] == "mimo-v2.5":
+                self.assertEqual(m.get("count"), 0)
+
+    def test_minimax_defaults_sensible(self):
+        """minimax-m3 gets sensible default parameters (in high tier)."""
+        from scripts.config import get_scenario_config
+        cfg = get_scenario_config(self.minimal_config, "general", tier="high")
         for m in cfg["panel"]["models"]:
             if m["name"] == "minimax-m3":
                 self.assertIn("temp", m)
@@ -226,9 +257,9 @@ class TestScenarioConfigWithTier(unittest.TestCase):
             self.fail("minimax-m3 not found")
 
     def test_qwen_defaults_sensible(self):
-        """qwen3.7-plus gets validated default parameters."""
+        """qwen3.7-plus gets validated default parameters (in high tier)."""
         from scripts.config import get_scenario_config
-        cfg = get_scenario_config(self.minimal_config, "general", tier="medium")
+        cfg = get_scenario_config(self.minimal_config, "general", tier="high")
         for m in cfg["panel"]["models"]:
             if m["name"] == "qwen3.7-plus":
                 self.assertEqual(m["temp"], 0.8)
@@ -241,11 +272,25 @@ class TestScenarioConfigWithTier(unittest.TestCase):
         else:
             self.fail("qwen3.7-plus not found")
 
+    def test_deepseek_v4_pro_defaults(self):
+        """deepseek-v4-pro gets validated default parameters (in medium tier)."""
+        from scripts.config import get_scenario_config
+        cfg = get_scenario_config(self.minimal_config, "general", tier="medium")
+        for m in cfg["panel"]["models"]:
+            if m["name"] == "deepseek-v4-pro":
+                self.assertEqual(m["temp"], 0.9)
+                self.assertEqual(m["top_p"], 0.95)
+                self.assertEqual(m["reasoning_mode"], "high")
+                self.assertEqual(m["max_completion_tokens"], 2048)
+                break
+        else:
+            self.fail("deepseek-v4-pro not found")
+
     def test_judge_config_unchanged_by_tier(self):
         """Judge config is identical regardless of tier."""
         from scripts.config import get_scenario_config
         cfg_no_tier = get_scenario_config(self.minimal_config, "coding")
-        for tier in ("min", "low", "medium"):
+        for tier in ("min", "low", "medium", "high"):
             cfg_tier = get_scenario_config(self.minimal_config, "coding", tier=tier)
             self.assertEqual(cfg_tier["judge"], cfg_no_tier["judge"],
                              f"Judge config changed for tier={tier}")
@@ -254,7 +299,7 @@ class TestScenarioConfigWithTier(unittest.TestCase):
         """Judge config is identical for general scenario too."""
         from scripts.config import get_scenario_config
         cfg_no_tier = get_scenario_config(self.minimal_config, "general")
-        for tier in ("min", "low", "medium"):
+        for tier in ("min", "low", "medium", "high"):
             cfg_tier = get_scenario_config(self.minimal_config, "general", tier=tier)
             self.assertEqual(cfg_tier["judge"], cfg_no_tier["judge"],
                              f"Judge config changed for tier={tier}")
@@ -264,7 +309,7 @@ class TestPanelTier(unittest.TestCase):
     """Test panel dispatch respects tier configs without making network calls."""
 
     def test_medium_tier_builds_expected_three_specs(self):
-        """medium tier builds deepseek, minimax, and qwen specs only."""
+        """medium tier builds deepseek, mimo, and deepseek-v4-pro specs only."""
         from scripts.panel import dispatch_panel
 
         config = {
@@ -317,12 +362,13 @@ class TestPanelTier(unittest.TestCase):
         labels = [r.get("label", "") for r in result["responses"]]
         self.assertEqual(len(labels), 3)
         self.assertIn("deepseek-v4-flash #1", labels)
-        self.assertIn("minimax-m3 #1", labels)
-        self.assertIn("qwen3.7-plus #1", labels)
-        self.assertFalse(any("mimo-v2.5" in label for label in labels), labels)
+        self.assertIn("deepseek-v4-pro #1", labels)
+        self.assertIn("mimo-v2.5 #1", labels)
+        self.assertFalse(any("minimax-m3" in label for label in labels), labels)
+        self.assertFalse(any("qwen3.7-plus" in label for label in labels), labels)
 
-    def test_min_tier_only_two_specs(self):
-        """min tier should only produce 2 call specs (1 deepseek, 1 mimo)."""
+    def test_min_tier_only_three_specs(self):
+        """min tier should produce 3 call specs (2 deepseek, 1 mimo)."""
         from scripts.panel import dispatch_panel
 
         config = {
@@ -350,16 +396,16 @@ class TestPanelTier(unittest.TestCase):
                     "retry": {"max_retries": 0, "delays_seconds": [0.1]},
                 },
             },
-            "pipeline": {"max_panel_workers": 2, "min_survivors": 1, "graceful_degradation": True},
+            "pipeline": {"max_panel_workers": 3, "min_survivors": 1, "graceful_degradation": True},
         }
 
         with mock.patch("scripts.panel.call_llm_with_retry") as mock_call:
             mock_call.return_value = {"success": True, "content": "test",
                                       "reasoning_content": None, "usage": {},
                                       "elapsed": 0.01}
-            result = dispatch_panel("test", "general", config=config, tier="min", max_workers=2)
+            result = dispatch_panel("test", "general", config=config, tier="min", max_workers=3)
 
-        self.assertEqual(len(result["responses"]), 2)
+        self.assertEqual(len(result["responses"]), 3)
 
     def test_top_k_passed_in_extra_params(self):
         """top_k from model config should be passed via extra_params."""
@@ -399,7 +445,7 @@ class TestPanelTier(unittest.TestCase):
             mock_call.return_value = {"success": True, "content": "test",
                                       "reasoning_content": None, "usage": {},
                                       "elapsed": 0.01}
-            dispatch_panel("test", "general", config=config, tier="medium", max_workers=1)
+            dispatch_panel("test", "general", config=config, tier="high", max_workers=1)
 
         # Check that call_llm_with_retry was called with extra_params containing top_k
         found_top_k = False
@@ -499,6 +545,14 @@ class TestCLITier(unittest.TestCase):
         self.assertEqual(rc, 0)
         data = json.loads(out)
         self.assertEqual(data["tier"], "medium")
+
+    def test_dry_run_tier_high(self):
+        """Dry-run with --tier high shows tier=high."""
+        import json
+        rc, out, _ = self._run("--dry-run", "--query", "test", "--tier", "high")
+        self.assertEqual(rc, 0)
+        data = json.loads(out)
+        self.assertEqual(data["tier"], "high")
 
     def test_dry_run_tier_invalid_accepted(self):
         """Invalid --tier value is accepted at parse time (validation happens in pipeline)."""

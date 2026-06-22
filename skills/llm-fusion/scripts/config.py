@@ -17,9 +17,10 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 TIER_MAP = {
-    "min": {"deepseek-v4-flash": 1, "mimo-v2.5": 1},
+    "min": {"deepseek-v4-flash": 2, "mimo-v2.5": 1},
     "low": {"deepseek-v4-flash": 2, "mimo-v2.5": 2},
-    "medium": {"deepseek-v4-flash": 1, "minimax-m3": 1, "qwen3.7-plus": 1},
+    "medium": {"deepseek-v4-flash": 1, "mimo-v2.5": 1, "deepseek-v4-pro": 1},
+    "high": {"deepseek-v4-pro": 1, "minimax-m3": 1, "qwen3.7-plus": 1},
 }
 
 MINIMAX_DEFAULTS = {
@@ -42,9 +43,19 @@ QWEN_DEFAULTS = {
     "max_tokens": 2048,
 }
 
+DEEPSEEK_V4_PRO_DEFAULTS = {
+    "name": "deepseek-v4-pro",
+    "count": 0,
+    "temp": 0.9,
+    "top_p": 0.95,
+    "reasoning_mode": "high",
+    "max_completion_tokens": 2048,
+}
+
 TIER_MODEL_DEFAULTS = {
     "minimax-m3": MINIMAX_DEFAULTS,
     "qwen3.7-plus": QWEN_DEFAULTS,
+    "deepseek-v4-pro": DEEPSEEK_V4_PRO_DEFAULTS,
 }
 
 TIER_CONTROLLED_MODELS = frozenset(
@@ -201,6 +212,7 @@ _MODEL_NAME_MAP = {
     "mimo": "mimo-v2.5",
     "minimax": "minimax-m3",
     "qwen": "qwen3.7-plus",
+    "deepseek-v4-pro": "deepseek-v4-pro",
 }
 
 
@@ -224,7 +236,7 @@ def resolve_tier_models(panel_cfg, tier="low"):
         The ``default.panel`` section of the fusion config (or a sub-dict
         containing keys ``tiers``, ``model_defaults``, and/or ``models``).
     tier : str
-        One of ``"min"``, ``"low"``, or ``"medium"``.  Falls back to
+        One of ``"min"``, ``"low"``, ``"medium"``, or ``"high"``.  Falls back to
         ``"low"`` when the requested tier is missing from the config.
 
     Returns

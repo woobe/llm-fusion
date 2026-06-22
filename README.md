@@ -43,12 +43,15 @@ user query
     v
 +-----------------------------+
 |  2. Panel (tier-based)      |  ThreadPoolExecutor
-|     +> min   — 1 deepseek   |  number of calls depends on tier:
-|       + 1 mimo (2 total)    |     min    = 2 calls
+|     +> min   — 2 deepseek   |  number of calls depends on tier:
+|       + 1 mimo (3 total)    |     min    = 3 calls
 |     +> low   — 2 deepseek   |     low    = 4 calls (default)
-|       + 2 mimo (4 total)    |     medium = 3 calls
-|     +> medium — 1 deepseek  |  (deepseek-v4-flash +
-|       + 1 minimax + 1 qwen  |   minimax-m3 + qwen3.7-plus)
+|       + 2 mimo (4 total)    |     medium = 3 calls (deepseek +
+|     +> medium — 1 deepseek  |       mimo + deepseek-v4-pro)
+|       + 1 mimo + 1 deepseek-v4-pro |     high  = 3 calls (deepseek-v4-pro
+|       (3 total)             |       + minimax-m3 + qwen3.7-plus)
+|     +> high — 1 deepseek-v4-pro |
+|       + 1 minimax + 1 qwen  |
 |       (3 total)             |
 +-----------------------------+
     |
@@ -73,7 +76,18 @@ user query
 
 ## Changelog
 
-### v0.2.3 (current)
+### v0.2.4 (current)
+- **DeepSeek V4 Pro** — validated and integrated into new tier structure
+  - New `min`: 2 deepseek-v4-flash + 1 mimo-v2.5 (3 calls)
+  - New `medium`: 1 deepseek-v4-flash + 1 mimo-v2.5 + 1 deepseek-v4-pro (3 calls)
+  - New `high`: 1 deepseek-v4-pro + 1 minimax-m3 + 1 qwen3.7-plus (3 calls)
+  - deepseek-v4-pro settings: temp=0.9, top_p=0.95, reasoning_mode=high, max_completion_tokens=2048
+  - reasoning_mode now supported in panel extra_params and triggers 1.5x timeout multiplier
+- CLI now supports `--tier high`
+- 4 tiers: min (3), low (4), medium (3), high (3) — all with judge config unchanged
+- Version bumped to 0.2.4
+
+### v0.2.3
 - **Qwen3.7 Plus** — validated and integrated into `medium` panel tier
   - New `medium`: 1 deepseek + 1 minimax-m3 + 1 qwen3.7-plus (3 calls)
   - Removed Mimo from `medium`; `min` and `low` still use Mimo
@@ -153,19 +167,23 @@ review, reasoning) or a structured intermediate analysis improves the output
 
 | Role | Model | temp | top_p | Extra | Token Param |
 |---|---|---|---|---|---|
-| Panel (all tiers) | deepseek-v4-flash | 0.75 | 0.9 | — | max_completion_tokens |
-| Panel (all tiers) | mimo-v2.5 | 0.6/0.7/0.8 | 0.95 | thinking.type=disabled | max_tokens |
-| Panel (medium only) | minimax-m3 | 0.85 | 0.9 | top_k=40, thinking.type=adaptive | max_tokens |
-| Panel (medium only) | qwen3.7-plus | 0.8 | 0.92 | top_k=20, reasoning_effort=high | max_tokens |
+| Panel (min, low, medium) | deepseek-v4-flash | 0.75 | 0.9 | — | max_completion_tokens |
+| Panel (min, low, medium) | mimo-v2.5 | 0.6/0.7/0.8 | 0.95 | thinking.type=disabled | max_tokens |
+| Panel (medium, high) | deepseek-v4-pro | 0.9 | 0.95 | reasoning_mode=high | max_completion_tokens |
+| Panel (high only) | minimax-m3 | 0.85 | 0.9 | top_k=40, thinking.type=adaptive | max_tokens |
+| Panel (high only) | qwen3.7-plus | 0.8 | 0.92 | top_k=20, reasoning_effort=high | max_tokens |
 | Judge (all tiers) | deepseek-v4-flash | 0.0 | 1.0 | reasoning_mode=high | max_completion_tokens |
 
 - **deepseek-v4-flash** — primary model for panel and judge. Fast, supports
   reasoning_mode for chain-of-thought, strong coding and reasoning capabilities.
 - **mimo-v2.5** — secondary panel model. Cheaper, adds diversity at marginal
   cost. Panel-only role (never makes synthesis decisions).
-- **minimax-m3** — panel-only model, active only in `medium` tier. Provides
+- **deepseek-v4-pro** — higher-capability deepseek model, active in `medium` and
+  `high` tiers. Uses reasoning_mode=high with max_completion_tokens for deeper
+  reasoning. Settings: temp=0.9, top_p=0.95.
+- **minimax-m3** — panel-only model, active only in `high` tier. Provides
   additional diversity with adaptive thinking at temp=0.85.
-- **qwen3.7-plus** — panel-only model, active only in `medium` tier. Provides a
+- **qwen3.7-plus** — panel-only model, active only in `high` tier. Provides a
   high-reasoning response with separate `reasoning_content` and validated direct
   top-level params.
 
@@ -227,8 +245,9 @@ llm-fusion/
 # Run with default (low) tier
 PYTHONPATH=skills/llm-fusion python3 -m scripts --query "What is 2+2?" --verbose
 
-# Choose a different tier (min / low / medium)
+# Choose a different tier (min / low / medium / high)
 PYTHONPATH=skills/llm-fusion python3 -m scripts --query "What is 2+2?" --tier medium --verbose
+PYTHONPATH=skills/llm-fusion python3 -m scripts --query "What is 2+2?" --tier high --verbose
 
 # Dry-run to validate config and arguments
 PYTHONPATH=skills/llm-fusion python3 -m scripts --dry-run --query "test" --tier min

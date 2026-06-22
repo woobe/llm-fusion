@@ -8,7 +8,7 @@ import argparse
 import json
 
 
-VERSION = "0.2.3"
+VERSION = "0.2.4"
 
 
 def build_parser():
@@ -39,7 +39,7 @@ def build_parser():
     parser.add_argument(
         "--tier", "-t",
         default="low",
-        help="Panel model tier: min (2 calls), low (4 calls, default), medium (3 calls: deepseek + minimax + qwen).",
+        help="Panel model tier: min (3 calls: 2 deepseek + 1 mimo), low (4 calls: 2 deepseek + 2 mimo, default), medium (3 calls: deepseek + mimo + deepseek-v4-pro), high (3 calls: deepseek-v4-pro + minimax-m3 + qwen3.7-plus).",
     )
     parser.add_argument(
         "--dry-run",
