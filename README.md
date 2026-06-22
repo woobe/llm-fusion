@@ -90,11 +90,11 @@ The panel uses a tier system to control how many models are called and which mod
 
 | Tier | Default | Calls | Panel | Judge |
 |----|----|----|----|----|
-| low1 | | 2 | 1x deepseek-v4-flash + 1x mimo-v2.5 | deepseek-v4-flash |
-| low2 | (default) | 4 | 2x deepseek-v4-flash + 2x mimo-v2.5 | deepseek-v4-flash |
-| low3 | | 6 | 3x deepseek-v4-flash + 3x mimo-v2.5 | deepseek-v4-flash |
-| medium | | 3 | 1x deepseek-v4-flash + 1x mimo-v2.5 + 1x deepseek-v4-pro | deepseek-v4-flash |
-| high | | 3 | 1x deepseek-v4-pro + 1x minimax-m3 + 1x qwen3.7-plus | deepseek-v4-flash |
+| low1 | | 2 | 1x deepseek-v4-flash + 1x mimo-v2.5 | mimo-v2.5 |
+| low2 | (default) | 4 | 2x deepseek-v4-flash + 2x mimo-v2.5 | mimo-v2.5 |
+| low3 | | 6 | 3x deepseek-v4-flash + 3x mimo-v2.5 | mimo-v2.5 |
+| medium | | 3 | 1x deepseek-v4-flash + 1x mimo-v2.5 + 1x deepseek-v4-pro | mimo-v2.5 |
+| high | | 3 | 1x deepseek-v4-pro + 1x minimax-m3 + 1x qwen3.7-plus | mimo-v2.5 |
 
 - **low1** — Fastest, lowest cost (2 calls). Best for simple factual queries.
 - **low2** — Balanced speed and diversity. Good default for most use cases.
@@ -288,12 +288,13 @@ review, reasoning) or a structured intermediate analysis improves the output
 | Panel (medium, high) | deepseek-v4-pro | 0.9 | 0.95 | reasoning_mode=high | max_completion_tokens |
 | Panel (high only) | minimax-m3 | 0.85 | 0.9 | top_k=40, thinking.type=adaptive | max_tokens |
 | Panel (high only) | qwen3.7-plus | 0.8 | 0.92 | top_k=20, reasoning_effort=high | max_tokens |
-| Judge (all tiers) | deepseek-v4-flash | 0.0 | 1.0 | reasoning_mode=high | max_completion_tokens |
+| Judge (all tiers) | mimo-v2.5 | 1.0 | 0.95 | thinking.type=enabled | max_tokens |
 
-- **deepseek-v4-flash** — primary model for panel and judge. Fast, supports
+- **deepseek-v4-flash** — primary panel model for low1/low2/low3/medium tiers. Fast, supports
   reasoning_mode for chain-of-thought, strong coding and reasoning capabilities.
-- **mimo-v2.5** — secondary panel model. Cheaper, adds diversity at marginal
-  cost. Panel-only role (never makes synthesis decisions).
+- **mimo-v2.5** — secondary panel model (low1/low2/low3/medium) and **judge model (all tiers)**.
+  Cheaper, uses internal thinking when enabled. Panel-only role for diversity; as judge it
+  synthesizes the final answer with thinking.type=enabled, temp=1.0, top_p=0.95.
 - **deepseek-v4-pro** — higher-capability deepseek model, active in `medium` and
   `high` tiers. Uses reasoning_mode=high with max_completion_tokens for deeper
   reasoning. Settings: temp=0.9, top_p=0.95.
