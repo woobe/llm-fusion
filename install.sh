@@ -19,7 +19,7 @@ if ! "$PYTHON" -m pip --version &>/dev/null; then
 fi
 
 echo "==> Installing Python dependencies..."
-"$PYTHON" -m pip install pyyaml
+PIP_BREAK_SYSTEM_PACKAGES=1 "$PYTHON" -m pip install pyyaml
 
 echo "==> Checking git..."
 if ! command -v git &>/dev/null; then
