@@ -60,7 +60,7 @@ PYTHONPATH=skills/llm-fusion python3 -m scripts --tier min --dry-run --query "Ex
 The panel uses a tier system to control how many models are called and which models participate. The default tier is **low** (4 calls).
 
 | Tier | Default | Calls | Panel | Judge |
-|---|---|---|---|---|---|
+|----|----|----|----|----|
 | min | | 3 | 2x deepseek-v4-flash + 1x mimo-v2.5 | deepseek-v4-flash |
 | low | (default) | 4 | 2x deepseek-v4-flash + 2x mimo-v2.5 | deepseek-v4-flash |
 | medium | | 3 | 1x deepseek-v4-flash + 1x mimo-v2.5 + 1x deepseek-v4-pro | deepseek-v4-flash |
