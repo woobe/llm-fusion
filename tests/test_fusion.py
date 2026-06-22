@@ -86,6 +86,49 @@ class TestConfig(unittest.TestCase):
         cfg = get_scenario_config({}, "coding")
         self.assertIn("panel", cfg)
 
+    def test_default_scenario_config_uses_mimo_judge(self):
+        from scripts.config import get_scenario_config
+
+        cfg = get_scenario_config({}, "general")
+        judge = cfg["judge"]
+
+        self.assertEqual(judge["model"], "mimo-v2.5")
+        self.assertEqual(judge["temp"], 1.0)
+        self.assertEqual(judge["top_p"], 0.95)
+        self.assertEqual(judge["max_tokens"], 2048)
+        self.assertEqual(judge["thinking"], {"type": "enabled"})
+        self.assertNotIn("max_completion_tokens", judge)
+        self.assertNotIn("reasoning_mode", judge)
+
+    def test_bundled_configs_use_mimo_judge_params(self):
+        from scripts.config import load_config
+
+        paths = [
+            "skills/llm-fusion/assets/fusion_config.yaml",
+            "skills/llm-fusion/assets/fusion_config.yaml.example",
+        ]
+        for path in paths:
+            cfg = load_config(path)
+            judge = cfg["default"]["judge"]
+            self.assertEqual(judge["model"], "mimo-v2.5", path)
+            self.assertEqual(judge["temp"], 1.0, path)
+            self.assertEqual(judge["top_p"], 0.95, path)
+            self.assertEqual(judge["max_tokens"], 2048, path)
+            self.assertEqual(judge["thinking"], {"type": "enabled"}, path)
+            self.assertNotIn("max_completion_tokens", judge, path)
+            self.assertNotIn("reasoning_mode", judge, path)
+
+            for scenario, scenario_cfg in cfg.get("scenarios", {}).items():
+                scenario_judge = scenario_cfg.get("judge", {})
+                self.assertNotIn("reasoning_mode", scenario_judge, f"{path}:{scenario}")
+                self.assertNotIn("max_completion_tokens", scenario_judge, f"{path}:{scenario}")
+                for stage_key in ("stage1", "stage2"):
+                    stage = scenario_judge.get(stage_key, {})
+                    self.assertNotIn("reasoning_mode", stage, f"{path}:{scenario}:{stage_key}")
+                    self.assertNotIn("max_completion_tokens", stage, f"{path}:{scenario}:{stage_key}")
+                    if stage:
+                        self.assertEqual(stage.get("max_tokens"), 2048, f"{path}:{scenario}:{stage_key}")
+
     def test_get_cleaning_profile(self):
         from scripts.config import get_cleaning_profile
         prof = get_cleaning_profile(self.minimal_config, "coding")
@@ -150,6 +193,103 @@ class TestAPIClient(unittest.TestCase):
         finally:
             if old_val is not None:
                 os.environ["OPENCODE_GO_API_KEY"] = old_val
+
+    def test_call_llm_mimo_defaults_thinking_disabled_when_not_provided(self):
+        from unittest import mock
+        from scripts.api_client import call_llm
+
+        captured = {}
+
+        class _Resp:
+            status = 200
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                return False
+            def read(self):
+                return b'{"choices":[{"message":{"content":"ok"}}],"usage":{}}'
+
+        def _fake_urlopen(req, timeout=None):
+            captured["payload"] = json.loads(req.data.decode("utf-8"))
+            return _Resp()
+
+        with mock.patch("urllib.request.urlopen", side_effect=_fake_urlopen):
+            result = call_llm(
+                "test",
+                model="mimo-v2.5",
+                endpoint="https://api.example.test/v1/chat/completions",
+                api_key="test-key",
+                max_tokens=2048,
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(captured["payload"]["thinking"], {"type": "disabled"})
+        self.assertEqual(captured["payload"]["max_tokens"], 2048)
+        self.assertNotIn("max_completion_tokens", captured["payload"])
+
+    def test_call_llm_mimo_preserves_explicit_thinking_enabled(self):
+        from unittest import mock
+        from scripts.api_client import call_llm
+
+        captured = {}
+
+        class _Resp:
+            status = 200
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                return False
+            def read(self):
+                return b'{"choices":[{"message":{"content":"ok"}}],"usage":{}}'
+
+        def _fake_urlopen(req, timeout=None):
+            captured["payload"] = json.loads(req.data.decode("utf-8"))
+            return _Resp()
+
+        with mock.patch("urllib.request.urlopen", side_effect=_fake_urlopen):
+            result = call_llm(
+                "test",
+                model="mimo-v2.5",
+                endpoint="https://api.example.test/v1/chat/completions",
+                api_key="test-key",
+                max_tokens=2048,
+                extra_params={"thinking": {"type": "enabled"}},
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(captured["payload"]["thinking"], {"type": "enabled"})
+
+    def test_call_llm_mimo_panel_thinking_disabled_when_extra_params_not_provided(self):
+        """Panel Mimo calls (without extra_params) still get thinking.disabled default."""
+        from unittest import mock
+        from scripts.api_client import call_llm
+
+        captured = {}
+
+        class _Resp:
+            status = 200
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                return False
+            def read(self):
+                return b'{"choices":[{"message":{"content":"ok"}}],"usage":{}}'
+
+        def _fake_urlopen(req, timeout=None):
+            captured["payload"] = json.loads(req.data.decode("utf-8"))
+            return _Resp()
+
+        with mock.patch("urllib.request.urlopen", side_effect=_fake_urlopen):
+            result = call_llm(
+                "test",
+                model="mimo-v2.5",
+                endpoint="https://api.example.test/v1/chat/completions",
+                api_key="test-key",
+                max_tokens=600,
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(captured["payload"]["thinking"], {"type": "disabled"})
 
 
 class TestClassifier(unittest.TestCase):
@@ -555,6 +695,56 @@ class TestPipeline(unittest.TestCase):
         self.assertIn("deadline_exceeded", result.get("metadata", {}))
         self.assertIn("exceeded", result.get("error", ""))
 
+    def test_pipeline_metadata_reports_mimo_judge_config(self):
+        from unittest import mock
+        from scripts.pipeline import run_pipeline
+
+        config = {
+            "default": {
+                "panel": {
+                    "models": [
+                        {"name": "mimo-v2.5", "count": 1, "temp": 0.7,
+                         "top_p": 0.95, "max_tokens": 100, "thinking": {"type": "disabled"}},
+                    ],
+                },
+                "judge": {
+                    "model": "mimo-v2.5",
+                    "temp": 1.0,
+                    "top_p": 0.95,
+                    "stages": "single",
+                    "max_tokens": 2048,
+                    "thinking": {"type": "enabled"},
+                },
+            },
+            "scenarios": {"general": {"judge": {"stages": "single"}}},
+            "cleaning": {"profiles": {"general": {"strip_fences": True, "strip_preamble": True,
+                                                    "min_words": 1, "dedup_threshold": 0.85}}},
+            "api": {"primary": {"timeout": {"panel_floor": 2, "judge_floor": 2,
+                                               "panel_throughput": 9999, "judge_throughput": 9999,
+                                               "overhead_seconds": 0, "max_timeout": 300},
+                                "retry": {"max_retries": 0, "delays_seconds": []}}},
+            "pipeline": {"max_panel_workers": 1, "min_survivors": 1, "graceful_degradation": False},
+        }
+
+        with mock.patch("scripts.pipeline.load_config", return_value=config), \
+             mock.patch("scripts.pipeline.dispatch_panel") as mock_panel, \
+             mock.patch("scripts.pipeline.judge_single_stage") as mock_judge:
+            mock_panel.return_value = {"success": True, "responses": [
+                {"label": "A", "success": True, "content": "panel answer",
+                 "reasoning_content": None, "usage": {}, "elapsed": 0.01},
+            ]}
+            mock_judge.return_value = {"success": True, "content": "final answer",
+                                       "reasoning_content": None, "usage": {}, "elapsed": 0.02}
+            result = run_pipeline("test query")
+
+        self.assertTrue(result["success"])
+        judge_config = result["metadata"]["judge"]["config"]
+        self.assertEqual(judge_config["model"], "mimo-v2.5")
+        self.assertEqual(judge_config["max_tokens"], 2048)
+        self.assertEqual(judge_config["thinking"], {"type": "enabled"})
+        self.assertIsNone(judge_config["reasoning_mode"])
+        self.assertIsNone(judge_config["max_completion_tokens"])
+
 
 class TestJudge(unittest.TestCase):
     """Test llm_fusion/judge.py"""
@@ -590,7 +780,13 @@ class TestJudge(unittest.TestCase):
         result = judge_single_stage(
             "test", [{"label": "A", "content": "hello"}],
             "general", config=fail_fast_config,
-            judge_config={"model": "deepseek-v4-flash"},
+            judge_config={
+                "model": "mimo-v2.5",
+                "temp": 1.0,
+                "top_p": 0.95,
+                "max_tokens": 2048,
+                "thinking": {"type": "enabled"},
+            },
         )
         self.assertIn("success", result)
 
@@ -600,7 +796,15 @@ class TestJudge(unittest.TestCase):
         result = judge_two_stage(
             "test", [{"label": "A", "content": "hello"}],
             "general", config=fail_fast_config,
-            judge_config={"model": "deepseek-v4-flash", "stage1": {}, "stage2": {}},
+            judge_config={
+                "model": "mimo-v2.5",
+                "temp": 1.0,
+                "top_p": 0.95,
+                "max_tokens": 2048,
+                "thinking": {"type": "enabled"},
+                "stage1": {},
+                "stage2": {},
+            },
         )
         self.assertIn("success", result)
         self.assertIn("stage1", result)
@@ -755,6 +959,151 @@ class TestJudge(unittest.TestCase):
         timeout = _derive_judge_timeout(judge_cfg, api_cfg)
         # derived: 2000/20+10=110, not 999
         self.assertEqual(timeout, 110)
+
+    def test_build_judge_llm_kwargs_mimo_uses_max_tokens_and_thinking(self):
+        from scripts.judge import _build_judge_llm_kwargs
+
+        kwargs = _build_judge_llm_kwargs({
+            "model": "mimo-v2.5",
+            "temp": 1.0,
+            "top_p": 0.95,
+            "max_tokens": 2048,
+            "thinking": {"type": "enabled"},
+        })
+
+        self.assertEqual(kwargs["model"], "mimo-v2.5")
+        self.assertEqual(kwargs["temperature"], 1.0)
+        self.assertEqual(kwargs["top_p"], 0.95)
+        self.assertEqual(kwargs["max_tokens"], 2048)
+        self.assertNotIn("max_completion_tokens", kwargs)
+        self.assertNotIn("reasoning_mode", kwargs)
+        self.assertEqual(kwargs["extra_params"], {"thinking": {"type": "enabled"}})
+
+    def test_build_judge_llm_kwargs_deepseek_preserves_legacy_params(self):
+        from scripts.judge import _build_judge_llm_kwargs
+
+        kwargs = _build_judge_llm_kwargs({
+            "model": "deepseek-v4-flash",
+            "temp": 0.0,
+            "top_p": 1.0,
+            "max_completion_tokens": 8000,
+            "reasoning_mode": "high",
+        })
+
+        self.assertEqual(kwargs["model"], "deepseek-v4-flash")
+        self.assertEqual(kwargs["max_completion_tokens"], 8000)
+        self.assertNotIn("max_tokens", kwargs)
+        self.assertEqual(kwargs["reasoning_mode"], "high")
+        self.assertNotIn("extra_params", kwargs)
+
+    def test_merge_judge_call_config_stage_inherits_mimo_defaults(self):
+        from scripts.judge import _merge_judge_call_config
+
+        merged = _merge_judge_call_config(
+            {
+                "model": "mimo-v2.5",
+                "temp": 1.0,
+                "top_p": 0.95,
+                "max_tokens": 2048,
+                "thinking": {"type": "enabled"},
+                "stage1": {"temp": 0.9},
+                "stage2": {"max_tokens": 1024},
+            },
+            {"temp": 0.9},
+        )
+
+        self.assertEqual(merged["model"], "mimo-v2.5")
+        self.assertEqual(merged["temp"], 0.9)
+        self.assertEqual(merged["top_p"], 0.95)
+        self.assertEqual(merged["max_tokens"], 2048)
+        self.assertEqual(merged["thinking"], {"type": "enabled"})
+        self.assertNotIn("stage1", merged)
+        self.assertNotIn("stage2", merged)
+
+    def test_derive_judge_timeout_uses_max_tokens_and_thinking_multiplier(self):
+        from scripts.judge import _derive_judge_timeout
+
+        api_cfg = {
+            "timeout": {
+                "judge_floor": 30,
+                "judge_throughput": 20,
+                "overhead_seconds": 10,
+                "max_timeout": 300,
+            },
+        }
+        judge_cfg = {"max_tokens": 2048, "thinking": {"type": "enabled"}}
+        timeout = _derive_judge_timeout(judge_cfg, api_cfg)
+
+        # int((2048 / 20 + 10) * 1.5) == 168
+        self.assertEqual(timeout, 168)
+
+    def test_judge_single_stage_passes_mimo_params_to_api_client(self):
+        from unittest import mock
+        from scripts.judge import judge_single_stage
+
+        captured = {}
+
+        def _fake_call(**kwargs):
+            captured.update(kwargs)
+            return {"success": True, "content": "ok", "reasoning_content": None,
+                    "usage": {}, "error": None, "elapsed": 0.01}
+
+        with mock.patch("scripts.judge.call_llm_with_retry", side_effect=_fake_call):
+            result = judge_single_stage(
+                "query",
+                [{"label": "A", "content": "answer"}],
+                "general",
+                config={"api": {"primary": {"timeout": {"judge_floor": 2}}}},
+                judge_config={
+                    "model": "mimo-v2.5",
+                    "temp": 1.0,
+                    "top_p": 0.95,
+                    "max_tokens": 2048,
+                    "thinking": {"type": "enabled"},
+                },
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(captured["model"], "mimo-v2.5")
+        self.assertEqual(captured["temperature"], 1.0)
+        self.assertEqual(captured["top_p"], 0.95)
+        self.assertEqual(captured["max_tokens"], 2048)
+        self.assertEqual(captured["extra_params"], {"thinking": {"type": "enabled"}})
+        self.assertNotIn("max_completion_tokens", captured)
+        self.assertNotIn("reasoning_mode", captured)
+
+    def test_judge_single_stage_preserves_deepseek_params_to_api_client(self):
+        from unittest import mock
+        from scripts.judge import judge_single_stage
+
+        captured = {}
+
+        def _fake_call(**kwargs):
+            captured.update(kwargs)
+            return {"success": True, "content": "ok", "reasoning_content": "reasoning",
+                    "usage": {}, "error": None, "elapsed": 0.01}
+
+        with mock.patch("scripts.judge.call_llm_with_retry", side_effect=_fake_call):
+            result = judge_single_stage(
+                "query",
+                [{"label": "A", "content": "answer"}],
+                "general",
+                config={"api": {"primary": {"timeout": {"judge_floor": 2}}}},
+                judge_config={
+                    "model": "deepseek-v4-flash",
+                    "temp": 0.0,
+                    "top_p": 1.0,
+                    "max_completion_tokens": 8000,
+                    "reasoning_mode": "high",
+                },
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(captured["model"], "deepseek-v4-flash")
+        self.assertEqual(captured["max_completion_tokens"], 8000)
+        self.assertEqual(captured["reasoning_mode"], "high")
+        self.assertNotIn("max_tokens", captured)
+        self.assertNotIn("extra_params", captured)
 
 
 class TestSkillHandler(unittest.TestCase):

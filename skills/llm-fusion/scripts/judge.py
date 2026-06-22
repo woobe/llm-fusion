@@ -194,28 +194,71 @@ JUDGE_SYSTEM_PROMPTS_STAGE2 = {
 }
 
 
+def _merge_judge_call_config(judge_config, stage_config=None):
+    """Merge top-level judge config with an optional stage override.
+
+    Stage configs inherit model, temp, top_p, token budget, and extra payload
+    params from the top-level judge config. Nested stage dictionaries are
+    removed from the merged per-call config.
+    """
+    merged = dict(judge_config or {})
+    merged.pop("stage1", None)
+    merged.pop("stage2", None)
+    merged.update(stage_config or {})
+    return merged
+
+
+def _is_mimo_model(model):
+    return "mimo" in (model or "").lower()
+
+
+def _build_judge_llm_kwargs(call_config, default_max_tokens=2048, default_max_completion_tokens=None):
+    """Build call_llm_with_retry kwargs from a merged judge call config.
+
+    Supports both Mimo-style max_tokens/thinking and legacy DeepSeek-style
+    max_completion_tokens/reasoning_mode.
+    """
+    call_config = call_config or {}
+    model = call_config.get("model", "mimo-v2.5")
+    is_mimo = _is_mimo_model(model)
+
+    kwargs = {
+        "model": model,
+        "temperature": call_config.get("temp", call_config.get("temperature", 1.0 if is_mimo else 0.0)),
+        "top_p": call_config.get("top_p", 0.95 if is_mimo else 1.0),
+    }
+
+    if call_config.get("max_tokens") is not None:
+        kwargs["max_tokens"] = call_config.get("max_tokens")
+    elif call_config.get("max_completion_tokens") is not None:
+        kwargs["max_completion_tokens"] = call_config.get("max_completion_tokens")
+    elif is_mimo:
+        kwargs["max_tokens"] = default_max_tokens
+    elif default_max_completion_tokens is not None:
+        kwargs["max_completion_tokens"] = default_max_completion_tokens
+
+    # reasoning_mode is a DeepSeek-specific knob. Do not send it to Mimo.
+    if call_config.get("reasoning_mode") and not is_mimo:
+        kwargs["reasoning_mode"] = call_config.get("reasoning_mode")
+
+    extra_params = {}
+    for key in ("thinking", "reasoning_effort", "top_k"):
+        if call_config.get(key) is not None:
+            extra_params[key] = call_config.get(key)
+    if extra_params:
+        kwargs["extra_params"] = extra_params
+
+    return kwargs
+
+
 def _derive_judge_timeout(judge_config, api_cfg):
-    """Derive judge timeout from max_completion_tokens using config formula.
+    """Derive judge timeout from max_tokens or max_completion_tokens.
 
-    Computes timeout for each stage (single-stage config, stage1, stage2)
-    and returns the maximum — ensures sufficient time for the longest call.
-
-    Formula: timeout = max(floor, max_completion_tokens / throughput + overhead)
-    - Applies reasoning_mode multiplier: 'high' → 1.5x, 'max' → 2x
-    - Supports two-stage judges via stage1/stage2 sub-keys
-
-    Parameters
-    ----------
-    judge_config : dict
-        Judge-specific config with max_completion_tokens, reasoning_mode,
-        and optional stage1/stage2 sub-dicts.
-    api_cfg : dict
-        The api.primary config dict containing timeout sub-dict.
-
-    Returns
-    -------
-    int
-        Timeout in seconds.
+    Computes timeout for each stage (single-stage config, stage1, stage2) and
+    returns the maximum. Applies multipliers for expensive reasoning/thinking:
+    - reasoning_mode='high' -> 1.5x
+    - reasoning_mode='max' -> 2.0x
+    - thinking.type in ('adaptive', 'enabled') -> at least 1.5x
     """
     timeout_cfg = api_cfg.get("timeout", {}) if api_cfg else {}
     floor = timeout_cfg.get("judge_floor", 60)
@@ -223,39 +266,36 @@ def _derive_judge_timeout(judge_config, api_cfg):
     overhead = timeout_cfg.get("overhead_seconds", 10)
     max_timeout = timeout_cfg.get("max_timeout", 300)
 
-    def _compute(raw_budget, raw_reasoning):
-        """Compute timeout for a single stage given token budget and reasoning_mode."""
-        if raw_budget > 0:
-            raw = raw_budget / throughput + overhead
+    def _compute(call_config):
+        token_budget = (
+            call_config.get("max_tokens")
+            or call_config.get("max_completion_tokens")
+            or 0
+        )
+        if token_budget > 0:
+            raw = token_budget / throughput + overhead
         else:
             raw = floor
-        rm = (raw_reasoning or "").lower()
+
+        multiplier = 1.0
+        rm = (call_config.get("reasoning_mode") or "").lower()
         if rm == "max":
-            raw *= 2.0
+            multiplier = max(multiplier, 2.0)
         elif rm == "high":
-            raw *= 1.5
-        return raw
+            multiplier = max(multiplier, 1.5)
 
-    candidates = []
+        thinking = call_config.get("thinking")
+        if isinstance(thinking, dict) and thinking.get("type") in ("adaptive", "enabled"):
+            multiplier = max(multiplier, 1.5)
 
-    # Single-stage config (top-level)
-    top_budget = judge_config.get("max_completion_tokens", 0)
-    top_reasoning = judge_config.get("reasoning_mode", "")
-    candidates.append(_compute(top_budget, top_reasoning))
+        return raw * multiplier
 
-    # Two-stage: stage1 sub-config
-    stage1 = judge_config.get("stage1", {})
-    if stage1 and isinstance(stage1, dict):
-        s1_budget = stage1.get("max_completion_tokens", 0)
-        s1_reasoning = stage1.get("reasoning_mode", top_reasoning)
-        candidates.append(_compute(s1_budget, s1_reasoning))
+    candidates = [_compute(_merge_judge_call_config(judge_config))]
 
-    # Two-stage: stage2 sub-config
-    stage2 = judge_config.get("stage2", {})
-    if stage2 and isinstance(stage2, dict):
-        s2_budget = stage2.get("max_completion_tokens", 0)
-        s2_reasoning = stage2.get("reasoning_mode", top_reasoning)
-        candidates.append(_compute(s2_budget, s2_reasoning))
+    for stage_key in ("stage1", "stage2"):
+        stage = (judge_config or {}).get(stage_key, {})
+        if stage and isinstance(stage, dict):
+            candidates.append(_compute(_merge_judge_call_config(judge_config, stage)))
 
     raw_timeout = max(candidates)
     timeout = max(floor, int(raw_timeout))
@@ -346,18 +386,21 @@ def judge_single_stage(query, responses, scenario_id, config=None, judge_config=
         judge_retries = retry_cfg.get("max_retries", 2)
         judge_delays = retry_cfg.get("delays_seconds", [1, 3])
 
+    judge_call_config = _merge_judge_call_config(judge_config)
+    judge_kwargs = _build_judge_llm_kwargs(
+        judge_call_config,
+        default_max_tokens=2048,
+        default_max_completion_tokens=8000,
+    )
+
     llm_result = call_llm_with_retry(
         prompt=user_prompt,
         system_prompt=system_prompt,
-        model=judge_config.get("model", "deepseek-v4-flash"),
-        temperature=judge_config.get("temp", 0.0),
-        top_p=judge_config.get("top_p", 1.0),
-        max_completion_tokens=judge_config.get("max_completion_tokens", 8000),
-        reasoning_mode=judge_config.get("reasoning_mode"),
         timeout=timeout,
         endpoint=endpoint,
         retries=judge_retries,
         delays=judge_delays,
+        **judge_kwargs,
     )
 
     result["success"] = llm_result["success"]
@@ -429,7 +472,7 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
     api_cfg = (config or {}).get("api", {}).get("primary", {})
     timeout = _derive_judge_timeout(judge_config, api_cfg)
     endpoint = api_cfg.get("endpoint")
-    model = judge_config.get("model", "deepseek-v4-flash")
+    model = judge_config.get("model", "mimo-v2.5")
 
     # Tier-aware retry for judge stages
     if config and tier:
@@ -463,18 +506,21 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
         f"this will be used as input to the synthesis stage."
     )
 
+    stage1_call_config = _merge_judge_call_config(judge_config, stage1_config)
+    stage1_kwargs = _build_judge_llm_kwargs(
+        stage1_call_config,
+        default_max_tokens=2048,
+        default_max_completion_tokens=10000,
+    )
+
     stage1_result = call_llm_with_retry(
         prompt=stage1_prompt,
         system_prompt=stage1_system,
-        model=model,
-        temperature=stage1_config.get("temp", 0.0),
-        top_p=stage1_config.get("top_p", 1.0),
-        max_completion_tokens=stage1_config.get("max_completion_tokens", 10000),
-        reasoning_mode=stage1_config.get("reasoning_mode"),
         timeout=timeout,
         endpoint=endpoint,
         retries=judge_retries,
         delays=judge_delays,
+        **stage1_kwargs,
     )
 
     stage1_content = stage1_result.get("content", "")
@@ -511,18 +557,21 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
         f"Synthesize the definitive final answer. Be thorough — this is the output the user will see."
     )
 
+    stage2_call_config = _merge_judge_call_config(judge_config, stage2_config)
+    stage2_kwargs = _build_judge_llm_kwargs(
+        stage2_call_config,
+        default_max_tokens=2048,
+        default_max_completion_tokens=12000,
+    )
+
     stage2_result = call_llm_with_retry(
         prompt=stage2_prompt,
         system_prompt=stage2_system,
-        model=model,
-        temperature=stage2_config.get("temp", 0.0),
-        top_p=stage2_config.get("top_p", 1.0),
-        max_completion_tokens=stage2_config.get("max_completion_tokens", 12000),
-        reasoning_mode=stage2_config.get("reasoning_mode"),
         timeout=timeout,
         endpoint=endpoint,
         retries=judge_retries,
         delays=judge_delays,
+        **stage2_kwargs,
     )
 
     stage2_content = stage2_result.get("content", "")

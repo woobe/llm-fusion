@@ -410,12 +410,12 @@ def _default_scenario_config():
             ],
         },
         "judge": {
-            "model": "deepseek-v4-flash",
-            "temp": 0.0,
-            "top_p": 1.0,
+            "model": "mimo-v2.5",
+            "temp": 1.0,
+            "top_p": 0.95,
             "stages": "single",
-            "reasoning_mode": "high",
-            "max_completion_tokens": 8000,
+            "thinking": {"type": "enabled"},
+            "max_tokens": 2048,
         },
         "cleaning": _default_cleaning_profile(),
         "conciseness_suffix": (

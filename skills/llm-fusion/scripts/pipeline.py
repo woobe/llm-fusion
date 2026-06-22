@@ -422,13 +422,29 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
 
         # Build judge metadata
         if judge_stages == "two":
+            stage1_cfg = judge_config.get("stage1", {})
+            stage2_cfg = judge_config.get("stage2", {})
             result["metadata"]["judge"] = {
                 "config": {
                     "stages": "two",
-                    "stage1_model": judge_config.get("model", "deepseek-v4-flash"),
-                    "stage1_reasoning_mode": judge_config.get("stage1", {}).get("reasoning_mode"),
-                    "stage2_model": judge_config.get("model", "deepseek-v4-flash"),
-                    "stage2_reasoning_mode": judge_config.get("stage2", {}).get("reasoning_mode"),
+                    "stage1_model": judge_config.get("model", "mimo-v2.5"),
+                    "stage1_max_tokens": stage1_cfg.get("max_tokens", judge_config.get("max_tokens")),
+                    "stage1_max_completion_tokens": stage1_cfg.get(
+                        "max_completion_tokens", judge_config.get("max_completion_tokens")
+                    ),
+                    "stage1_reasoning_mode": stage1_cfg.get(
+                        "reasoning_mode", judge_config.get("reasoning_mode")
+                    ),
+                    "stage1_thinking": stage1_cfg.get("thinking", judge_config.get("thinking")),
+                    "stage2_model": judge_config.get("model", "mimo-v2.5"),
+                    "stage2_max_tokens": stage2_cfg.get("max_tokens", judge_config.get("max_tokens")),
+                    "stage2_max_completion_tokens": stage2_cfg.get(
+                        "max_completion_tokens", judge_config.get("max_completion_tokens")
+                    ),
+                    "stage2_reasoning_mode": stage2_cfg.get(
+                        "reasoning_mode", judge_config.get("reasoning_mode")
+                    ),
+                    "stage2_thinking": stage2_cfg.get("thinking", judge_config.get("thinking")),
                 },
                 "stage1": {
                     "success": judge_result.get("stage1", {}).get("success"),
@@ -445,8 +461,11 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
             result["metadata"]["judge"] = {
                 "config": {
                     "stages": "single",
-                    "model": judge_config.get("model", "deepseek-v4-flash"),
+                    "model": judge_config.get("model", "mimo-v2.5"),
+                    "max_tokens": judge_config.get("max_tokens"),
+                    "max_completion_tokens": judge_config.get("max_completion_tokens"),
                     "reasoning_mode": judge_config.get("reasoning_mode"),
+                    "thinking": judge_config.get("thinking"),
                 },
                 "usage": judge_result.get("usage"),
                 "elapsed": judge_result.get("elapsed", 0),

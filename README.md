@@ -141,7 +141,7 @@ user query
     v
 +-----------------------------+
 |  4. Judge                   |  single or two-stage synthesis
-|     +> final answer         |  temp=0.0, high reasoning mode
+|     +> final answer         |  temp=1.0, thinking.enabled
 |   (unchanged by tier)       |  same judge config for all tiers
 +-----------------------------+
     |
@@ -153,7 +153,19 @@ user query
 
 ## Changelog
 
-### v0.2.7 (current)
+### v0.2.8 (current)
+- **Swapped judge model** — deepseek-v4-flash → mimo-v2.5 (temp=1.0, top_p=0.95, thinking.enabled, max_tokens=2048)
+- **Improved judge latency** — validated avg 8.8s vs 15-35s for deepseek-v4-flash
+- **Model-agnostic judge helpers** — `_merge_judge_call_config()`, `_build_judge_llm_kwargs()` support both Mimo and DeepSeek configs
+- **api_client.py** — Mimo thinking now configurable via `extra_params`; hardcoded disabled only applies when no explicit thinking param passed
+- **judge.py** — `_derive_judge_timeout()` handles both `max_tokens` and `max_completion_tokens`, plus `thinking.type` multiplier
+- **Config defaults** — `config.py`, `fusion_config.yaml`, `fusion_config.yaml.example` all updated to Mimo judge
+- **Pipeline metadata** — reports model-neutral judge config fields
+- **Backward compatible** — existing configs using `deepseek-v4-flash` as judge still work
+- 163 tests pass
+- Version bumped to 0.2.8
+
+### v0.2.7
 - **Restructured tiers** — removed `min` and `low`, replaced with `low1` (1+1), `low2` (2+2), and `low3` (3+3)
 - **New tier lineup:** low1 / low2 / low3 / medium / high (5 tiers)
 - **Express path** now gated on `low1` instead of `min`

@@ -44,12 +44,13 @@ fusion:
           reasoning_mode: high
           max_completion_tokens: 2048
     judge:
-      model: deepseek-v4-flash
-      temp: 0.0
-      top_p: 1.0
+      model: mimo-v2.5
+      temp: 1.0
+      top_p: 0.95
       stages: single
-      reasoning_mode: high
-      max_completion_tokens: 8000
+      thinking:
+        type: enabled
+      max_tokens: 2048
 
   scenarios:
     coding:
@@ -59,8 +60,6 @@ fusion:
           max_completion_tokens: 2000
       judge:
         stages: single
-        reasoning_mode: max
-        max_completion_tokens: 16000
     bugfix:
       panel:
         deepseek:
@@ -71,11 +70,9 @@ fusion:
       judge:
         stages: two
         stage1:
-          reasoning_mode: high
-          max_completion_tokens: 4000
+          max_tokens: 2048
         stage2:
-          reasoning_mode: high
-          max_completion_tokens: 8000
+          max_tokens: 2048
     qa:
       panel:
         deepseek:
@@ -85,8 +82,6 @@ fusion:
           temps: [0.3, 0.4, 0.5]
       judge:
         stages: single
-        reasoning_mode: low
-        max_completion_tokens: 2000
     plan_review:
       panel:
         deepseek:
@@ -97,11 +92,9 @@ fusion:
       judge:
         stages: two
         stage1:
-          reasoning_mode: high
-          max_completion_tokens: 8000
+          max_tokens: 2048
         stage2:
-          reasoning_mode: max
-          max_completion_tokens: 12000
+          max_tokens: 2048
     creative:
       panel:
         deepseek:
@@ -111,9 +104,6 @@ fusion:
           temps: [0.8, 0.9, 1.0]
       judge:
         stages: single
-        reasoning_mode: low
-        temp: 0.7
-        max_completion_tokens: 4000
     reasoning:
       panel:
         deepseek:
@@ -124,11 +114,9 @@ fusion:
       judge:
         stages: two
         stage1:
-          reasoning_mode: max
-          max_completion_tokens: 10000
+          max_tokens: 2048
         stage2:
-          reasoning_mode: max
-          max_completion_tokens: 12000
+          max_tokens: 2048
     document:
       panel:
         deepseek:
@@ -139,11 +127,9 @@ fusion:
       judge:
         stages: two
         stage1:
-          reasoning_mode: high
-          max_completion_tokens: 8000
+          max_tokens: 2048
         stage2:
-          reasoning_mode: max
-          max_completion_tokens: 12000
+          max_tokens: 2048
     general:
       panel:
         deepseek:
@@ -153,8 +139,6 @@ fusion:
           temps: [0.6, 0.7, 0.8]
       judge:
         stages: single
-        reasoning_mode: high
-        max_completion_tokens: 8000
 
   cleaning:
     profiles:

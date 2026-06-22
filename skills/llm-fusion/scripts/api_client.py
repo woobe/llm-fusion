@@ -107,7 +107,8 @@ def call_llm(
     api_key : str or None
         API key. If None, read via read_api_key().
     extra_params : dict or None
-        Additional JSON payload keys.
+        Additional JSON payload keys. Values here are authoritative; for example,
+        a caller may pass {"thinking": {"type": "enabled"}} for Mimo judge calls.
 
     Returns
     -------
@@ -170,13 +171,13 @@ def call_llm(
     if reasoning_mode:
         payload["reasoning_mode"] = reasoning_mode
 
-    # Mimo model needs thinking disabled
-    if "mimo" in model.lower():
-        payload["thinking"] = {"type": "disabled"}
-
-    # Extra params (e.g. thinking config for specific models)
+    # Extra params are caller-authoritative (e.g. thinking enabled for judge Mimo).
     if extra_params:
         payload.update(extra_params)
+
+    # Mimo panel calls default to thinking disabled unless explicitly configured.
+    if "mimo" in model.lower() and "thinking" not in payload:
+        payload["thinking"] = {"type": "disabled"}
 
     headers = {
         "Authorization": f"Bearer {api_key}",
