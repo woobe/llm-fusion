@@ -14,6 +14,7 @@ Never raises exceptions.
 import os
 import sys
 import time
+import re
 
 from scripts.config import load_config, get_scenario_config, normalize_tier
 from scripts.classifier import classify_query
@@ -177,12 +178,17 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
 
     # --- Express QA path (short-circuit for simple factual questions) ---
     express_cfg = pipeline_cfg.get("express_qa", {})
+    # Check exclusion patterns (skip express for explanatory/descriptive queries)
+    exclude_patterns = express_cfg.get("exclude_patterns", [])
+    is_excluded = any(re.search(pat, query, re.IGNORECASE) for pat in exclude_patterns) if exclude_patterns else False
     if (
         express_cfg.get("enabled", False)
         and scenario_id == "qa"
         and normalized_tier == "min"
         and len(query) <= express_cfg.get("max_chars", 120)
         and classification.get("confidence", 0.0) >= express_cfg.get("min_confidence", 0.85)
+        and classification.get("detection_method") == express_cfg.get("detection_method", "regex")
+        and not is_excluded
     ):
         express_start = time.monotonic()
         if verbose:

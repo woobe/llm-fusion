@@ -225,7 +225,16 @@ fusion:
       min_confidence: 0.85
       model: deepseek-v4-flash
       temperature: 0.0
-      max_completion_tokens: 600
+      max_completion_tokens: 1200
+      detection_method: regex
+      exclude_patterns:
+        - "\\bexplain\\b"
+        - "\\bcompare\\b"
+        - "\\bdescribe\\b"
+        - "\\bdifference between\\b"
+        - "\\bhow does\\b"
+        - "\\bwhy does\\b"
+        - "\\bwith examples?\\b"
     retry:
       min:
         max_retries: 0

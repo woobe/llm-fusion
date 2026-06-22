@@ -19,38 +19,38 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/woobe/llm-fusion/main/in
 
 Then in chat (tier examples — min, low/default, medium, high):
 ```bash
-llm-fusion min Explain recursion in one sentence
-llm-fusion low Compare REST and GraphQL API design trade-offs
-llm-fusion medium Write a Python function to merge overlapping intervals
-llm-fusion high Analyse microservices vs monolith trade-offs for a startup
+llm-fusion min What is the capital of Australia?
+llm-fusion low Write a bash one-liner to find the 5 largest files in a directory
+llm-fusion medium Explain the difference between TCP and UDP with examples
+llm-fusion high Compare SQLite and PostgreSQL for a mobile app
 ```
 
 Scenarios are auto-detected. To force a specific scenario:
 ```bash
-llm-fusion coding: Write a Python script that watches a directory and uploads new files to S3
-llm-fusion bugfix: My pytest fixture resets state between tests — here's my conftest.py...
-llm-fusion qa: What are the downsides of using Redis as a primary database?
-llm-fusion plan_review: Review this migration plan from PostgreSQL to CockroachDB...
-llm-fusion creative: Write a short story where a git merge conflict gains sentience
-llm-fusion reasoning: If a bat and a ball cost $1.10 and the bat costs $1 more than the ball, how much does the ball cost?
-llm-fusion document: Take this raw API response and format it as clean markdown docs
-llm-fusion general: Explain the CAP theorem with real-world database examples
+llm-fusion coding: Write a Python function to download a file from a URL with a progress bar
+llm-fusion bugfix: My Python script raises a KeyError on dict access — here's the relevant code...
+llm-fusion qa: What is the population of Japan?
+llm-fusion plan_review: Review this simple blog database schema for potential issues
+llm-fusion creative: Write a haiku about debugging
+llm-fusion reasoning: A train leaves station A at 60 km/h. Station B is 120 km away. How long does the journey take?
+llm-fusion document: Format this raw error log into a clear user-facing error message
+llm-fusion general: What are the main differences between British and American English?
 ```
 
 Combine tier and scenario:
 ```bash
-llm-fusion medium coding: Build a Python rate-limited HTTP client with retries
-llm-fusion high reasoning: Design a data pipeline for real-time Twitter sentiment analysis
-llm-fusion min qa: Is MongoDB suitable as the primary store for an e-commerce product catalog?
-llm-fusion high creative: Write a dialogue between a senior and junior dev about when to refactor
+llm-fusion medium coding: Write a Python function that retries an API call up to 3 times with exponential backoff
+llm-fusion high reasoning: A store sells apples at $2 each and oranges at $3 each. If I buy 5 fruits for $12, how many of each did I buy?
+llm-fusion min qa: Who founded SpaceX?
+llm-fusion high creative: Write a short conversation between a senior and junior developer about code reviews
 ```
 
 Or from the command line (same queries, no Hermes chat needed):
 ```bash
-PYTHONPATH=skills/llm-fusion python3 -m scripts --query "Compare REST and GraphQL API trade-offs"
-PYTHONPATH=skills/llm-fusion python3 -m scripts --tier medium --query "Write a Python function to merge overlapping intervals"
-PYTHONPATH=skills/llm-fusion python3 -m scripts --tier high --query "Analyse microservices vs monolith trade-offs for a startup"
-PYTHONPATH=skills/llm-fusion python3 -m scripts --tier min --dry-run --query "Explain recursion"
+PYTHONPATH=skills/llm-fusion python3 -m scripts --query "What are the main differences between British and American English?"
+PYTHONPATH=skills/llm-fusion python3 -m scripts --tier medium --query "Write a Python function that retries an API call up to 3 times with exponential backoff"
+PYTHONPATH=skills/llm-fusion python3 -m scripts --tier high --query "Compare SQLite and PostgreSQL for a mobile app"
+PYTHONPATH=skills/llm-fusion python3 -m scripts --tier min --dry-run --query "What is the capital of Australia?"
 ```
 
 ---
@@ -120,7 +120,14 @@ user query
 
 ## Changelog
 
-### v0.2.5 (current)
+### v0.2.6 (current)
+- **Fixed express QA misclassification** — now gated on regex-only `qa` detection, preventing LLM-classified explanatory questions from bypassing panel+judge
+- **Added explanatory keyword exclusion patterns** — `explain`, `compare`, `describe`, `difference between`, `how does`, `why does`, `with example` block express path for non-factual queries
+- **Raised express token budget** 600→1200 for safety headroom
+- **Improved LLM classifier** — returns structured JSON with `scenario`, `confidence`, `is_factual` for better routing decisions
+- Version bumped to 0.2.6
+
+### v0.2.5
 - **Express direct path** for simple factual QA — short-circuits panel+judge when classifier detects short QA at high confidence, cutting pipeline time to a single direct LLM call
 - **Reduced general judge reasoning** from `high` to `low` for min/low tiers — directly attacks the 47-53s general scenario judge bottleneck
 - **Lowered default judge token budgets** — default 8000→4000, coding 16000→8000 (no test case exceeded 3679 completion tokens)

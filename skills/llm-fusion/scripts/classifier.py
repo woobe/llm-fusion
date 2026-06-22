@@ -281,8 +281,9 @@ def classify_query(query, config=None):
 def _llm_classifier(query, config):
     """Perform LLM-based second-pass classification.
 
-    Uses deepseek-v4-flash with temp=0.0, max_tokens=50.
-    Prompt asks model to classify into one of the 8 scenarios with one word.
+    Uses deepseek-v4-flash with temp=0.0, max_tokens=100.
+    Prompt asks model to return JSON with scenario, confidence, is_factual.
+    Falls back to one-word parsing on JSON parse failure.
 
     Returns a classifier result dict, or None on failure.
     Never raises.
@@ -293,7 +294,7 @@ def _llm_classifier(query, config):
         cls_config = config.get("classification", {})
         model = cls_config.get("llm_model", "deepseek-v4-flash")
         temperature = cls_config.get("llm_temp", 0.0)
-        max_tokens = cls_config.get("llm_max_tokens", 50)
+        max_tokens = cls_config.get("llm_max_tokens", 100)
 
         # Read timeout from config timeout block, fall back to panel_floor
         api_cfg = config.get("api", {}).get("primary", {}) if config else {}
@@ -301,8 +302,15 @@ def _llm_classifier(query, config):
         cls_timeout = timeout_cfg.get("panel_floor", 30)
 
         prompt = (
-            "Classify this query into one: coding|bugfix|qa|plan_review|creative|reasoning|document|general. "
-            "Answer with one word only.\n\n"
+            "Classify this query into one of these scenarios: coding, bugfix, qa, "
+            "plan_review, creative, reasoning, document, general. "
+            "Distinguish factual QA (what/who/where/when questions about verifiable facts) "
+            "from explanatory or general questions. "
+            "Return a JSON object with these fields:\n"
+            "- scenario: one of the scenarios listed above\n"
+            "- confidence: a float between 0 and 1\n"
+            "- is_factual: true if the query asks about a verifiable fact, false otherwise\n\n"
+            "Example: {\"scenario\": \"qa\", \"confidence\": 0.85, \"is_factual\": true}\n\n"
             f"{query}"
         )
 
@@ -316,15 +324,43 @@ def _llm_classifier(query, config):
         )
 
         if result["success"] and result["content"]:
-            response = result["content"].strip().lower().rstrip(".,!?;")
+            response = result["content"].strip()
+
+            # Try JSON parsing first
+            import json
+            try:
+                json_start = response.find('{')
+                json_end = response.rfind('}')
+                if json_start != -1 and json_end != -1:
+                    parsed = json.loads(response[json_start:json_end + 1])
+                    scenario = parsed.get("scenario", "").lower().strip()
+                    confidence = float(parsed.get("confidence", 0.85))
+                    is_factual = parsed.get("is_factual", False)
+                    valid_scenarios = {"coding", "bugfix", "qa", "plan_review",
+                                       "creative", "reasoning", "document", "general"}
+                    if scenario in valid_scenarios:
+                        return {
+                            "scenario": scenario,
+                            "confidence": min(max(confidence, 0.0), 1.0),
+                            "detection_method": "llm",
+                            "reason": f"llm classifier identified as '{scenario}' "
+                                      f"(is_factual={is_factual})",
+                        }
+            except (json.JSONDecodeError, ValueError, TypeError):
+                pass
+
+            # Fallback: try one-word parsing on the raw response
+            one_word = response.lower().rstrip(".,!?;")
+            for ch in "\"'\u2018\u2019":
+                one_word = one_word.replace(ch, '')
             valid_scenarios = {"coding", "bugfix", "qa", "plan_review",
                                "creative", "reasoning", "document", "general"}
-            if response in valid_scenarios:
+            if one_word in valid_scenarios:
                 return {
-                    "scenario": response,
+                    "scenario": one_word,
                     "confidence": 0.90,
                     "detection_method": "llm",
-                    "reason": f"llm classifier identified as '{response}'",
+                    "reason": f"llm classifier identified as '{one_word}'",
                 }
 
     except Exception:
