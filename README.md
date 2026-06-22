@@ -120,7 +120,17 @@ user query
 
 ## Changelog
 
-### v0.2.4 (current)
+### v0.2.5 (current)
+- **Express direct path** for simple factual QA — short-circuits panel+judge when classifier detects short QA at high confidence, cutting pipeline time to a single direct LLM call
+- **Reduced general judge reasoning** from `high` to `low` for min/low tiers — directly attacks the 47-53s general scenario judge bottleneck
+- **Lowered default judge token budgets** — default 8000→4000, coding 16000→8000 (no test case exceeded 3679 completion tokens)
+- **Tighter timeouts matching real data** — panel 30→40s, judge 60→65s, max_timeout 300→90s, soft deadline 180→90s
+- **Judge input truncation** — configurable max_panel_response_chars per scenario (qa=1200, general=1800)
+- **Tier-aware retry policy** — min tier uses 0 retries, low/medium use 1 retry, high uses 2 retries
+- All changes grounded in real latency test data (12-case benchmark across min/low tiers)
+- Version bumped to 0.2.5
+
+### v0.2.4
 - **DeepSeek V4 Pro** — validated and integrated into new tier structure
   - New `min`: 2 deepseek-v4-flash + 1 mimo-v2.5 (3 calls)
   - New `medium`: 1 deepseek-v4-flash + 1 mimo-v2.5 + 1 deepseek-v4-pro (3 calls)

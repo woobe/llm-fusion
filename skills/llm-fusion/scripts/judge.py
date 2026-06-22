@@ -262,7 +262,7 @@ def _derive_judge_timeout(judge_config, api_cfg):
     return min(timeout, max_timeout)
 
 
-def judge_single_stage(query, responses, scenario_id, config=None, judge_config=None):
+def judge_single_stage(query, responses, scenario_id, config=None, judge_config=None, tier=None):
     """Run a single-stage judge synthesis.
 
     Takes the original query and cleaned panel responses, builds a prompt
@@ -277,11 +277,14 @@ def judge_single_stage(query, responses, scenario_id, config=None, judge_config=
     scenario_id : str
         Scenario identifier.
     config : dict or None
-        Full fusion config (for API settings).
+        Full fusion config (for API settings and tier-aware retry config).
     judge_config : dict or None
         Judge-specific config with keys: model, temp, top_p,
-        max_completion_tokens, reasoning_mode.
+        max_completion_tokens, reasoning_mode,
+        and optionally max_panel_response_chars.
         If None, extracted from config.
+    tier : str or None
+        Panel tier for tier-aware retry config. If None, defaults to api-level retry.
 
     Returns
     -------
@@ -316,8 +319,9 @@ def judge_single_stage(query, responses, scenario_id, config=None, judge_config=
         JUDGE_SYSTEM_PROMPTS_SINGLE["general"],
     )
 
-    # Build responses section
-    responses_section = _build_responses_section(responses)
+    # Build responses section with optional truncation
+    max_chars = judge_config.get("max_panel_response_chars")
+    responses_section = _build_responses_section(responses, max_chars=max_chars)
 
     user_prompt = (
         f"Original query: {query}\n\n"
@@ -329,6 +333,19 @@ def judge_single_stage(query, responses, scenario_id, config=None, judge_config=
     timeout = _derive_judge_timeout(judge_config, api_cfg)
     endpoint = api_cfg.get("endpoint")
 
+    # Tier-aware retry: try pipeline.retry.<tier>, fallback to api retry, then defaults
+    if config and tier:
+        tier_retry = config.get("pipeline", {}).get("retry", {}).get(tier, {})
+        judge_retries = tier_retry.get("max_retries")
+        judge_delays = list(tier_retry.get("delays_seconds", []))
+    else:
+        judge_retries = None
+        judge_delays = []
+    if judge_retries is None:
+        retry_cfg = api_cfg.get("retry", {})
+        judge_retries = retry_cfg.get("max_retries", 2)
+        judge_delays = retry_cfg.get("delays_seconds", [1, 3])
+
     llm_result = call_llm_with_retry(
         prompt=user_prompt,
         system_prompt=system_prompt,
@@ -339,8 +356,8 @@ def judge_single_stage(query, responses, scenario_id, config=None, judge_config=
         reasoning_mode=judge_config.get("reasoning_mode"),
         timeout=timeout,
         endpoint=endpoint,
-        retries=2,
-        delays=(1, 3),
+        retries=judge_retries,
+        delays=judge_delays,
     )
 
     result["success"] = llm_result["success"]
@@ -353,7 +370,7 @@ def judge_single_stage(query, responses, scenario_id, config=None, judge_config=
     return result
 
 
-def judge_two_stage(query, responses, scenario_id, config=None, judge_config=None):
+def judge_two_stage(query, responses, scenario_id, config=None, judge_config=None, tier=None):
     """Run a two-stage judge (analysis then synthesis).
 
     Stage 1: Produce a structured analysis of all panel responses.
@@ -371,6 +388,8 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
         Full fusion config.
     judge_config : dict or None
         Judge-specific config (must contain 'stage1' and 'stage2' sub-dicts).
+    tier : str or None
+        Panel tier for tier-aware retry config. If None, defaults to api-level retry.
 
     Returns
     -------
@@ -412,7 +431,22 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
     endpoint = api_cfg.get("endpoint")
     model = judge_config.get("model", "deepseek-v4-flash")
 
-    responses_section = _build_responses_section(responses)
+    # Tier-aware retry for judge stages
+    if config and tier:
+        tier_retry = config.get("pipeline", {}).get("retry", {}).get(tier, {})
+        judge_retries = tier_retry.get("max_retries")
+        judge_delays = list(tier_retry.get("delays_seconds", []))
+    else:
+        judge_retries = None
+        judge_delays = []
+    if judge_retries is None:
+        retry_cfg = api_cfg.get("retry", {})
+        judge_retries = retry_cfg.get("max_retries", 2)
+        judge_delays = retry_cfg.get("delays_seconds", [1, 3])
+
+    # Build responses section with optional truncation
+    max_chars = judge_config.get("max_panel_response_chars")
+    responses_section = _build_responses_section(responses, max_chars=max_chars)
 
     # --- Stage 1: Analysis ---
     stage1_system = JUDGE_SYSTEM_PROMPTS_STAGE1.get(
@@ -425,7 +459,7 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
         f"Below are {len(responses)} independent analyses from different models. "
         f"Produce a structured comparative analysis.\n\n"
         f"{responses_section}\n\n"
-        f"Produce your structured analysis now. Be thorough and specific \u2014 "
+        f"Produce your structured analysis now. Be thorough and specific — "
         f"this will be used as input to the synthesis stage."
     )
 
@@ -439,8 +473,8 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
         reasoning_mode=stage1_config.get("reasoning_mode"),
         timeout=timeout,
         endpoint=endpoint,
-        retries=2,
-        delays=(1, 3),
+        retries=judge_retries,
+        delays=judge_delays,
     )
 
     stage1_content = stage1_result.get("content", "")
@@ -474,7 +508,7 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
         f"{responses_section}\n\n"
         f"Below is a structured analysis of these responses:\n\n"
         f"{stage1_content}\n\n"
-        f"Synthesize the definitive final answer. Be thorough \u2014 this is the output the user will see."
+        f"Synthesize the definitive final answer. Be thorough — this is the output the user will see."
     )
 
     stage2_result = call_llm_with_retry(
@@ -487,8 +521,8 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
         reasoning_mode=stage2_config.get("reasoning_mode"),
         timeout=timeout,
         endpoint=endpoint,
-        retries=2,
-        delays=(1, 3),
+        retries=judge_retries,
+        delays=judge_delays,
     )
 
     stage2_content = stage2_result.get("content", "")
@@ -518,13 +552,20 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
     return result
 
 
-def _build_responses_section(responses):
-    """Build the '=== Label ===\nContent\n' section for judge prompts."""
+def _build_responses_section(responses, max_chars=None):
+    """Build the '=== Label ===\nContent\n' section for judge prompts.
+
+    If *max_chars* is set, each response's content is truncated to that many
+    characters (with a truncation notice appended) to keep the judge prompt
+    within a reasonable size.
+    """
     parts = []
     for resp in responses:
         label = resp.get("label", "Response")
         content = resp.get("cleaned_content") or resp.get("content", "")
         if content:
+            if max_chars is not None and len(content) > max_chars:
+                content = content[:max_chars] + "\n\n[truncated to first {} chars]".format(max_chars)
             parts.append(f"=== {label} ===\n{content}")
     if not parts:
         parts.append("(no valid responses)")

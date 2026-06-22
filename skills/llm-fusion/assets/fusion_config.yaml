@@ -47,7 +47,7 @@ fusion:
       top_p: 1.0
       stages: single
       reasoning_mode: high
-      max_completion_tokens: 8000
+      max_completion_tokens: 4000
 
   scenarios:
     coding:
@@ -58,7 +58,7 @@ fusion:
       judge:
         stages: single
         reasoning_mode: max
-        max_completion_tokens: 16000
+        max_completion_tokens: 8000
     bugfix:
       panel:
         deepseek:
@@ -85,6 +85,7 @@ fusion:
         stages: single
         reasoning_mode: low
         max_completion_tokens: 2000
+        max_panel_response_chars: 1200
     plan_review:
       panel:
         deepseek:
@@ -151,8 +152,9 @@ fusion:
           temps: [0.6, 0.7, 0.8]
       judge:
         stages: single
-        reasoning_mode: high
-        max_completion_tokens: 8000
+        reasoning_mode: low
+        max_completion_tokens: 4000
+        max_panel_response_chars: 1800
 
   cleaning:
     profiles:
@@ -201,12 +203,12 @@ fusion:
     primary:
       endpoint: "https://opencode.ai/zen/go/v1/chat/completions"
       timeout:
-        panel_floor: 30
-        judge_floor: 60
+        panel_floor: 40
+        judge_floor: 65
         panel_throughput: 25
         judge_throughput: 20
         overhead_seconds: 10
-        max_timeout: 300
+        max_timeout: 90
       retry:
         max_retries: 2
         delays_seconds: [1, 3]
@@ -215,5 +217,25 @@ fusion:
     default_tier: low
     max_panel_workers: 6
     min_survivors: 2
-    soft_deadline_seconds: 180
+    soft_deadline_seconds: 90
     graceful_degradation: true
+    express_qa:
+      enabled: true
+      max_chars: 120
+      min_confidence: 0.85
+      model: deepseek-v4-flash
+      temperature: 0.0
+      max_completion_tokens: 600
+    retry:
+      min:
+        max_retries: 0
+        delays_seconds: []
+      low:
+        max_retries: 1
+        delays_seconds: [1]
+      medium:
+        max_retries: 1
+        delays_seconds: [1]
+      high:
+        max_retries: 2
+        delays_seconds: [1, 3]

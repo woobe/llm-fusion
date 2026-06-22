@@ -175,6 +175,50 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
     if deadline_check:
         return deadline_check
 
+    # --- Express QA path (short-circuit for simple factual questions) ---
+    express_cfg = pipeline_cfg.get("express_qa", {})
+    if (
+        express_cfg.get("enabled", False)
+        and scenario_id == "qa"
+        and normalized_tier == "min"
+        and len(query) <= express_cfg.get("max_chars", 120)
+        and classification.get("confidence", 0.0) >= express_cfg.get("min_confidence", 0.85)
+    ):
+        express_start = time.monotonic()
+        if verbose:
+            print("[pipeline] Express QA short-circuit triggered — skipping panel+judge...")
+        from scripts.api_client import call_llm_with_retry
+        api_cfg = config.get("api", {}).get("primary", {}) if config else {}
+        endpoint = api_cfg.get("endpoint")
+        timeout_cfg = api_cfg.get("timeout", {})
+        fb_timeout = timeout_cfg.get("judge_floor", 60)
+        direct = call_llm_with_retry(
+            prompt=query,
+            model=express_cfg.get("model", "deepseek-v4-flash"),
+            temperature=express_cfg.get("temperature", 0.0),
+            max_completion_tokens=express_cfg.get("max_completion_tokens", 600),
+            timeout=fb_timeout,
+            endpoint=endpoint,
+            retries=1,
+            delays=(2,),
+        )
+        if direct["success"]:
+            result["success"] = True
+            result["answer"] = direct.get("content")
+            result["reasoning_content"] = direct.get("reasoning_content")
+            result["metadata"]["level"] = "express"
+            result["metadata"]["judge"] = {"mode": "express_direct", "model": express_cfg.get("model", "deepseek-v4-flash")}
+            result["elapsed"] = time.monotonic() - express_start
+            result["metadata"]["timing_ms"] = {
+                "classification": int(t_class * 1000),
+                "judge": int((time.monotonic() - express_start) * 1000),
+                "total": int((time.monotonic() - start) * 1000),
+            }
+            return _save(result)
+        if verbose:
+            print("[pipeline] Express QA call failed, falling through to normal panel+judge",
+                  file=sys.stderr)
+
     # --- Step 2: Resolve scenario config ---
     scenario_cfg = get_scenario_config(config, scenario_id, tier=normalized_tier)
 
@@ -333,11 +377,13 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
         judge_result = judge_two_stage(
             query, cleaned_responses, scenario_id,
             config=config, judge_config=judge_config,
+            tier=normalized_tier,
         )
     else:
         judge_result = judge_single_stage(
             query, cleaned_responses, scenario_id,
             config=config, judge_config=judge_config,
+            tier=normalized_tier,
         )
     t_judge = time.monotonic() - t0
 

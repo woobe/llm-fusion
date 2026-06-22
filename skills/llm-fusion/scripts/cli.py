@@ -8,7 +8,7 @@ import argparse
 import json
 
 
-VERSION = "0.2.4"
+VERSION = "0.2.5"
 
 
 def build_parser():

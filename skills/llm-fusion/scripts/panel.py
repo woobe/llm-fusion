@@ -222,12 +222,21 @@ def dispatch_panel(query, scenario_id, config=None, max_workers=None, tier=None,
     # Build the user prompt with conciseness suffix
     user_prompt = f"{query}\n\n{conciseness_suffix}"
 
-    # Retrieve API config for retry/timeout settings
+    # Retrieve API config for retry/timeout settings — tier-aware
     api_cfg = config.get("api", {})
     primary_cfg = api_cfg.get("primary", {})
-    retry_cfg = primary_cfg.get("retry", {})
-    max_retries = retry_cfg.get("max_retries", 2)
-    delays = retry_cfg.get("delays_seconds", [1, 3])
+    # Try tier-specific retry config from pipeline.retry.<tier>
+    tier_retry = {}
+    if config:
+        tier_retry = config.get("pipeline", {}).get("retry", {}).get(tier, {}) if tier else {}
+    if tier_retry.get("max_retries") is not None:
+        max_retries = tier_retry["max_retries"]
+        delays = list(tier_retry.get("delays_seconds", []))
+    else:
+        # Fall back to api-level retry
+        retry_cfg = primary_cfg.get("retry", {})
+        max_retries = retry_cfg.get("max_retries", 2)
+        delays = retry_cfg.get("delays_seconds", [1, 3])
 
     # Build the list of call specifications
     call_specs = _build_call_specs(models_list, user_prompt, config)
