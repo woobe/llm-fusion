@@ -48,6 +48,21 @@ def read_api_key(env_path=None, env_var=None):
     except (FileNotFoundError, PermissionError, OSError):
         pass
 
+    # 3. Try HERMES_HOME/.env if no explicit path was given and ~ resolution was wrong
+    if env_path is None:
+        hermes_home = os.environ.get("HERMES_HOME")
+        if hermes_home:
+            hermes_path = os.path.join(hermes_home, ".env")
+            if hermes_path != path:
+                try:
+                    with open(hermes_path, "r") as fh:
+                        for line in fh:
+                            line = line.strip()
+                            if line.startswith(env_var + "="):
+                                return line.split("=", 1)[1]
+                except (FileNotFoundError, PermissionError, OSError):
+                    pass
+
     return None
 
 

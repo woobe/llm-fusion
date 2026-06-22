@@ -50,8 +50,9 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
     """
     start = time.monotonic()
 
-    # Normalize tier once near the top
     normalized_tier = normalize_tier(tier)
+
+
 
     result = {
         "success": False,
@@ -93,6 +94,20 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
     # Pipeline soft deadline
     pipeline_cfg = config.get("pipeline", {}) if config else {}
     soft_deadline = pipeline_cfg.get("soft_deadline_seconds", 0)
+    graceful = pipeline_cfg.get("graceful_degradation", True)
+
+    # Resolve output directory
+    resolved_output_dir = output_dir
+    if resolved_output_dir is None and config:
+        resolved_output_dir = config.get("pipeline", {}).get("output_dir", None)
+
+    def _save(r):
+        if resolved_output_dir:
+            try:
+                save_output(r, output_dir=resolved_output_dir)
+            except Exception:
+                pass
+        return r
 
     def _check_deadline(phase):
         """Check if pipeline has exceeded the soft deadline.
@@ -116,7 +131,7 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
         if not graceful:
             result["error"] = f"Soft deadline ({soft_deadline}s) exceeded during {phase}"
             result["elapsed"] = elapsed
-            return result
+            return _save(result)
         if verbose:
             print(f"[pipeline] Falling back to direct call", file=sys.stderr)
         direct_result = _direct_fallback(query, config)
@@ -129,7 +144,7 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
         else:
             result["error"] = f"Deadline exceeded during {phase}, fallback also failed"
             result["elapsed"] = elapsed
-        return result
+        return _save(result)
 
     # --- Step 1: Classify ---
     t0 = time.monotonic()
@@ -150,7 +165,6 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
 
     # --- Step 2: Resolve scenario config ---
     scenario_cfg = get_scenario_config(config, scenario_id, tier=normalized_tier)
-    graceful = pipeline_cfg.get("graceful_degradation", True)
 
     # --- Step 3: Dispatch panel ---
     t0 = time.monotonic()
@@ -174,6 +188,20 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
     }
     result["metadata"]["panel"].update(panel_metrics)
 
+    # Store raw panel responses for inspection
+    result["panel_responses"] = []
+    for r in panel_result.get("responses", []):
+        result["panel_responses"].append({
+            "label": r.get("label"),
+            "model": r.get("model"),
+            "success": r.get("success"),
+            "content": r.get("content"),
+            "reasoning_content": r.get("reasoning_content"),
+            "usage": r.get("usage"),
+            "error": r.get("error"),
+            "timing_ms": r.get("timing_ms"),
+        })
+
     if verbose:
         print(f"[pipeline] Panel complete: "
               f"{panel_metrics['models_succeeded']}/{panel_metrics['models_attempted']} succeeded "
@@ -191,7 +219,7 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
                 "total": int((time.monotonic() - start) * 1000),
             }
             result["elapsed"] = time.monotonic() - start
-            return result
+            return _save(result)
         # Graceful degradation: try a direct LLM call
         if verbose:
             print("[pipeline] Graceful degradation: making direct LLM call...")
@@ -208,11 +236,11 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
                 "total": int((time.monotonic() - start) * 1000),
             }
             result["elapsed"] = time.monotonic() - start
-            return result
+            return _save(result)
         else:
             result["error"] = "Panel and fallback both failed"
             result["elapsed"] = time.monotonic() - start
-            return result
+            return _save(result)
 
     # --- Step 4: Clean responses ---
     t0 = time.monotonic()
@@ -238,7 +266,7 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
         if not graceful:
             result["error"] = f"Not enough survivors ({survived} < minimum)"
             result["elapsed"] = time.monotonic() - start
-            return result
+            return _save(result)
         if verbose:
             print(f"[pipeline] Not enough survivors ({survived}), using direct fallback...")
         direct_result = _direct_fallback(query, config)
@@ -255,7 +283,7 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
                 "total": int((time.monotonic() - start) * 1000),
             }
             result["elapsed"] = time.monotonic() - start
-            return result
+            return _save(result)
 
     # --- Step 5: Judge ---
     judge_config = scenario_cfg.get("judge", {})
@@ -285,7 +313,7 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
         if not graceful:
             result["error"] = f"Judge failed: {judge_result.get('error')}"
             result["elapsed"] = time.monotonic() - start
-            return result
+            return _save(result)
         if verbose:
             print("[pipeline] Judge failed, using direct fallback...")
         direct_result = _direct_fallback(query, config)
@@ -298,7 +326,7 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
         else:
             result["error"] = "Judge and fallback both failed"
             result["elapsed"] = time.monotonic() - start
-            return result
+            return _save(result)
     else:
         result["success"] = True
         result["answer"] = judge_result.get("content")
@@ -355,12 +383,14 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
     result["elapsed"] = total_elapsed
 
     # --- Step 6: Save output ---
+    if output_dir is None and config:
+        output_dir = config.get("pipeline", {}).get("output_dir", None)
     if output_dir:
         saved_path = save_output(result, output_dir=output_dir)
         if verbose:
             print(f"[pipeline] Output saved to: {saved_path}")
 
-    return result
+    return _save(result)
 
 
 def _direct_fallback(query, config):

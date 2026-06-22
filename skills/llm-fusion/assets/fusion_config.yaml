@@ -202,5 +202,6 @@ fusion:
     default_tier: low
     max_panel_workers: 6
     min_survivors: 2
+    output_dir: ./fusion_output/
     soft_deadline_seconds: 180
     graceful_degradation: true

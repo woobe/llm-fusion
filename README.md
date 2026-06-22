@@ -90,6 +90,7 @@ user query
 - Judge config unchanged by tier (all tiers use same judge config)
 - Worker count adjusts dynamically to panel size
 - CLI now supports `--tier min|low|medium`
+- **Bug fixes:** API key HERMES_HOME fallback, output saved on all paths, panel responses in JSON, graceful variable scoping fix, output dir consistency
 
 ### v0.2
 - Removed src/llm_fusion/ duplication, all code in scripts/ only
