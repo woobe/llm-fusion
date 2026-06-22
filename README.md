@@ -18,14 +18,41 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/woobe/llm-fusion/main/in
 ```
 
 Then in chat:
-```
+```bash
 /llm-fusion What is the capital of France?
+/llm-fusion coding: Write a Python function to sort a list
+/llm-fusion --tier medium Explain the benefits of functional programming
+/llm-fusion --tier high Compare Rust and Go for systems programming
+/llm-fusion --tier min What time is it in Tokyo?
 ```
 
 Scenarios are auto-detected. To force a specific scenario:
+```bash
+/llm-fusion bugfix: This function throws a KeyError...
+/llm-fusion reasoning: If all A are B and some B are C...
+/llm-fusion creative: Write a short story about a robot painter
+/llm-fusion qa: What is the population of Japan?
+/llm-fusion plan_review: Review this project roadmap...
+/llm-fusion document: Summarize this API spec...
 ```
-/llm-fusion coding: Write a Python function to sort a list
-```
+
+---
+
+## Tiers
+
+The panel uses a tier system to control how many models are called and which models participate. The default tier is **low** (4 calls).
+
+| Tier | Default | Calls | Models |
+|---|---|---|---|
+| min | | 3 | 2x deepseek-v4-flash + 1x mimo-v2.5 |
+| low | (default) | 4 | 2x deepseek-v4-flash + 2x mimo-v2.5 |
+| medium | | 3 | 1x deepseek-v4-flash + 1x mimo-v2.5 + 1x deepseek-v4-pro |
+| high | | 3 | 1x deepseek-v4-pro + 1x minimax-m3 + 1x qwen3.7-plus |
+
+- **min** — Fastest, lowest cost. Best for simple factual queries.
+- **low** — Balanced speed and diversity. Good default for most use cases.
+- **medium** — Adds deepseek-v4-pro for deeper reasoning. Good for coding, analysis.
+- **high** — Premium panel with 3 different models. Best for complex reasoning, creative work, and important queries where quality matters most.
 
 ---
 
