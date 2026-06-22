@@ -25,7 +25,7 @@ fusion:
           temp: 0.85
           top_p: 0.9
           top_k: 40
-          max_tokens: 2048
+          max_tokens: 4096
           thinking:
             type: adaptive
         - name: qwen3.7-plus
@@ -34,13 +34,13 @@ fusion:
           top_p: 0.92
           top_k: 20
           reasoning_effort: high
-          max_tokens: 2048
+          max_tokens: 4096
         - name: deepseek-v4-pro
           count: 0
           temp: 0.9
           top_p: 0.95
           reasoning_mode: high
-          max_completion_tokens: 2048
+          max_completion_tokens: 4096
     judge:
       model: mimo-v2.5
       temp: 1.0
@@ -48,7 +48,7 @@ fusion:
       stages: single
       thinking:
         type: enabled
-      max_tokens: 2048
+      max_tokens: 4096
 
   scenarios:
     coding:
@@ -56,6 +56,9 @@ fusion:
         deepseek:
           temp: 0.5
           max_completion_tokens: 2000
+        mimo:
+          temps: [0.4, 0.5, 0.6]
+          max_tokens: 2000
       judge:
         stages: single
     bugfix:
@@ -65,19 +68,21 @@ fusion:
           max_completion_tokens: 2000
         mimo:
           temps: [0.4, 0.5, 0.6]
+          max_tokens: 2000
       judge:
         stages: two
         stage1:
-          max_tokens: 2048
+          max_tokens: 6144
         stage2:
-          max_tokens: 2048
+          max_tokens: 6144
     qa:
       panel:
         deepseek:
           temp: 0.3
-          max_completion_tokens: 400
+          max_completion_tokens: 800
         mimo:
           temps: [0.3, 0.4, 0.5]
+          max_tokens: 800
       judge:
         stages: single
         max_panel_response_chars: 1200
@@ -88,12 +93,13 @@ fusion:
           max_completion_tokens: 3000
         mimo:
           temps: [0.6, 0.7, 0.8]
+          max_tokens: 2500
       judge:
         stages: two
         stage1:
-          max_tokens: 2048
+          max_tokens: 6144
         stage2:
-          max_tokens: 2048
+          max_tokens: 6144
     creative:
       panel:
         deepseek:
@@ -101,21 +107,23 @@ fusion:
           max_completion_tokens: 4000
         mimo:
           temps: [0.8, 0.9, 1.0]
+          max_tokens: 2500
       judge:
         stages: single
     reasoning:
       panel:
         deepseek:
           temp: 0.5
-          max_completion_tokens: 2000
+          max_completion_tokens: 3000
         mimo:
           temps: [0.5, 0.6, 0.7]
+          max_tokens: 2000
       judge:
         stages: two
         stage1:
-          max_tokens: 2048
+          max_tokens: 6144
         stage2:
-          max_tokens: 2048
+          max_tokens: 6144
     document:
       panel:
         deepseek:
@@ -123,19 +131,21 @@ fusion:
           max_completion_tokens: 4000
         mimo:
           temps: [0.5, 0.6, 0.7]
+          max_tokens: 3000
       judge:
         stages: two
         stage1:
-          max_tokens: 2048
+          max_tokens: 6144
         stage2:
-          max_tokens: 2048
+          max_tokens: 6144
     general:
       panel:
         deepseek:
           temp: 0.75
-          max_completion_tokens: 800
+          max_completion_tokens: 1200
         mimo:
           temps: [0.6, 0.7, 0.8]
+          max_tokens: 1200
       judge:
         stages: single
         max_panel_response_chars: 1800
@@ -187,12 +197,12 @@ fusion:
     primary:
       endpoint: "https://opencode.ai/zen/go/v1/chat/completions"
       timeout:
-        panel_floor: 40
-        judge_floor: 65
+        panel_floor: 60
+        judge_floor: 90
         panel_throughput: 25
         judge_throughput: 20
-        overhead_seconds: 10
-        max_timeout: 90
+        overhead_seconds: 15
+        max_timeout: 360
       retry:
         max_retries: 2
         delays_seconds: [1, 3]
@@ -201,7 +211,7 @@ fusion:
     default_tier: low2
     max_panel_workers: 6
     min_survivors: 2
-    soft_deadline_seconds: 90
+    soft_deadline_seconds: 300
     graceful_degradation: true
     express_qa:
       enabled: true

@@ -212,7 +212,7 @@ def _is_mimo_model(model):
     return "mimo" in (model or "").lower()
 
 
-def _build_judge_llm_kwargs(call_config, default_max_tokens=2048, default_max_completion_tokens=None):
+def _build_judge_llm_kwargs(call_config, default_max_tokens=4096, default_max_completion_tokens=None):
     """Build call_llm_with_retry kwargs from a merged judge call config.
 
     Supports both Mimo-style max_tokens/thinking and legacy DeepSeek-style
@@ -261,10 +261,10 @@ def _derive_judge_timeout(judge_config, api_cfg):
     - thinking.type in ('adaptive', 'enabled') -> at least 1.5x
     """
     timeout_cfg = api_cfg.get("timeout", {}) if api_cfg else {}
-    floor = timeout_cfg.get("judge_floor", 60)
+    floor = timeout_cfg.get("judge_floor", 90)
     throughput = timeout_cfg.get("judge_throughput", 20)
-    overhead = timeout_cfg.get("overhead_seconds", 10)
-    max_timeout = timeout_cfg.get("max_timeout", 300)
+    overhead = timeout_cfg.get("overhead_seconds", 15)
+    max_timeout = timeout_cfg.get("max_timeout", 480)
 
     def _compute(call_config):
         token_budget = (
@@ -389,7 +389,7 @@ def judge_single_stage(query, responses, scenario_id, config=None, judge_config=
     judge_call_config = _merge_judge_call_config(judge_config)
     judge_kwargs = _build_judge_llm_kwargs(
         judge_call_config,
-        default_max_tokens=2048,
+        default_max_tokens=4096,
         default_max_completion_tokens=8000,
     )
 
@@ -509,7 +509,7 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
     stage1_call_config = _merge_judge_call_config(judge_config, stage1_config)
     stage1_kwargs = _build_judge_llm_kwargs(
         stage1_call_config,
-        default_max_tokens=2048,
+        default_max_tokens=4096,
         default_max_completion_tokens=10000,
     )
 
@@ -560,7 +560,7 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
     stage2_call_config = _merge_judge_call_config(judge_config, stage2_config)
     stage2_kwargs = _build_judge_llm_kwargs(
         stage2_call_config,
-        default_max_tokens=2048,
+        default_max_tokens=4096,
         default_max_completion_tokens=12000,
     )
 

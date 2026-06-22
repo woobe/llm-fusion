@@ -30,7 +30,7 @@ MINIMAX_DEFAULTS = {
     "temp": 0.85,
     "top_p": 0.9,
     "top_k": 40,
-    "max_tokens": 2048,
+    "max_tokens": 4096,
     "thinking": {"type": "adaptive"},
 }
 
@@ -41,7 +41,7 @@ QWEN_DEFAULTS = {
     "top_p": 0.92,
     "top_k": 20,
     "reasoning_effort": "high",
-    "max_tokens": 2048,
+    "max_tokens": 4096,
 }
 
 DEEPSEEK_V4_PRO_DEFAULTS = {
@@ -50,7 +50,7 @@ DEEPSEEK_V4_PRO_DEFAULTS = {
     "temp": 0.9,
     "top_p": 0.95,
     "reasoning_mode": "high",
-    "max_completion_tokens": 2048,
+    "max_completion_tokens": 4096,
 }
 
 TIER_MODEL_DEFAULTS = {
@@ -406,7 +406,7 @@ def _default_scenario_config():
                 {"name": "deepseek-v4-flash", "count": 3, "temp": 0.75, "top_p": 0.9,
                  "max_completion_tokens": 800},
                 {"name": "mimo-v2.5", "count": 3, "temps": [0.6, 0.7, 0.8], "top_p": 0.95,
-                 "max_tokens": 600, "thinking": {"type": "disabled"}},
+                 "max_tokens": 1000, "thinking": {"type": "disabled"}},
             ],
         },
         "judge": {
@@ -415,7 +415,7 @@ def _default_scenario_config():
             "top_p": 0.95,
             "stages": "single",
             "thinking": {"type": "enabled"},
-            "max_tokens": 2048,
+            "max_tokens": 4096,
         },
         "cleaning": _default_cleaning_profile(),
         "conciseness_suffix": (

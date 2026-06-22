@@ -275,7 +275,7 @@ class TestScenarioConfigWithTier(unittest.TestCase):
                 self.assertEqual(m["top_p"], 0.92)
                 self.assertEqual(m["top_k"], 20)
                 self.assertEqual(m["reasoning_effort"], "high")
-                self.assertEqual(m["max_tokens"], 2048)
+                self.assertEqual(m["max_tokens"], 4096)
                 self.assertNotIn("max_completion_tokens", m)
                 break
         else:
@@ -290,7 +290,7 @@ class TestScenarioConfigWithTier(unittest.TestCase):
                 self.assertEqual(m["temp"], 0.9)
                 self.assertEqual(m["top_p"], 0.95)
                 self.assertEqual(m["reasoning_mode"], "high")
-                self.assertEqual(m["max_completion_tokens"], 2048)
+                self.assertEqual(m["max_completion_tokens"], 4096)
                 break
         else:
             self.fail("deepseek-v4-pro not found")

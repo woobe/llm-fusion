@@ -95,10 +95,86 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(judge["model"], "mimo-v2.5")
         self.assertEqual(judge["temp"], 1.0)
         self.assertEqual(judge["top_p"], 0.95)
-        self.assertEqual(judge["max_tokens"], 2048)
+        self.assertEqual(judge["max_tokens"], 4096)
         self.assertEqual(judge["thinking"], {"type": "enabled"})
         self.assertNotIn("max_completion_tokens", judge)
         self.assertNotIn("reasoning_mode", judge)
+
+        mimo_panel = next(m for m in cfg["panel"]["models"] if m["name"] == "mimo-v2.5")
+        self.assertEqual(mimo_panel["max_tokens"], 1000)
+
+    def test_bundled_configs_mirror_timeout_and_deadline_policy(self):
+        from scripts.config import load_config
+
+        active = load_config("skills/llm-fusion/assets/fusion_config.yaml")
+        example = load_config("skills/llm-fusion/assets/fusion_config.yaml.example")
+
+        expected_timeout = {
+            "panel_floor": 60,
+            "judge_floor": 90,
+            "panel_throughput": 25,
+            "judge_throughput": 20,
+            "overhead_seconds": 15,
+            "max_timeout": 360,
+        }
+
+        self.assertEqual(active["api"]["primary"]["timeout"], expected_timeout)
+        self.assertEqual(example["api"]["primary"]["timeout"], expected_timeout)
+        self.assertEqual(active["pipeline"]["soft_deadline_seconds"], 300)
+        self.assertEqual(example["pipeline"]["soft_deadline_seconds"], 300)
+
+    def test_bundled_configs_have_scenario_mimo_panel_budgets(self):
+        from scripts.config import get_scenario_config, load_config
+
+        expected = {
+            "qa": 800,
+            "general": 1200,
+            "coding": 2000,
+            "bugfix": 2000,
+            "reasoning": 2000,
+            "plan_review": 2500,
+            "creative": 2500,
+            "document": 3000,
+        }
+        paths = [
+            "skills/llm-fusion/assets/fusion_config.yaml",
+            "skills/llm-fusion/assets/fusion_config.yaml.example",
+        ]
+        for path in paths:
+            cfg = load_config(path)
+            for scenario, max_tokens in expected.items():
+                scenario_cfg = get_scenario_config(cfg, scenario, tier="low1")
+                mimo = next(m for m in scenario_cfg["panel"]["models"] if m["name"] == "mimo-v2.5")
+                self.assertEqual(mimo["max_tokens"], max_tokens, f"{path}:{scenario}")
+                self.assertEqual(mimo["thinking"], {"type": "disabled"}, f"{path}:{scenario}")
+
+    def test_bundled_configs_have_4096_high_tier_defaults(self):
+        from scripts.config import load_config
+
+        paths = [
+            "skills/llm-fusion/assets/fusion_config.yaml",
+            "skills/llm-fusion/assets/fusion_config.yaml.example",
+        ]
+        for path in paths:
+            cfg = load_config(path)
+            models = {m["name"]: m for m in cfg["default"]["panel"]["models"]}
+            self.assertEqual(models["minimax-m3"]["max_tokens"], 4096, path)
+            self.assertEqual(models["qwen3.7-plus"]["max_tokens"], 4096, path)
+            self.assertEqual(models["deepseek-v4-pro"]["max_completion_tokens"], 4096, path)
+
+    def test_bundled_configs_mirror_panel_response_caps(self):
+        from scripts.config import load_config
+
+        active = load_config("skills/llm-fusion/assets/fusion_config.yaml")
+        example = load_config("skills/llm-fusion/assets/fusion_config.yaml.example")
+
+        for scenario in ("qa", "general"):
+            active_cap = active["scenarios"][scenario]["judge"].get("max_panel_response_chars")
+            example_cap = example["scenarios"][scenario]["judge"].get("max_panel_response_chars")
+            self.assertEqual(example_cap, active_cap, scenario)
+
+        self.assertEqual(active["scenarios"]["qa"]["judge"]["max_panel_response_chars"], 1200)
+        self.assertEqual(active["scenarios"]["general"]["judge"]["max_panel_response_chars"], 1800)
 
     def test_bundled_configs_use_mimo_judge_params(self):
         from scripts.config import load_config
@@ -113,7 +189,7 @@ class TestConfig(unittest.TestCase):
             self.assertEqual(judge["model"], "mimo-v2.5", path)
             self.assertEqual(judge["temp"], 1.0, path)
             self.assertEqual(judge["top_p"], 0.95, path)
-            self.assertEqual(judge["max_tokens"], 2048, path)
+            self.assertEqual(judge["max_tokens"], 4096, path)
             self.assertEqual(judge["thinking"], {"type": "enabled"}, path)
             self.assertNotIn("max_completion_tokens", judge, path)
             self.assertNotIn("reasoning_mode", judge, path)
@@ -127,7 +203,23 @@ class TestConfig(unittest.TestCase):
                     self.assertNotIn("reasoning_mode", stage, f"{path}:{scenario}:{stage_key}")
                     self.assertNotIn("max_completion_tokens", stage, f"{path}:{scenario}:{stage_key}")
                     if stage:
-                        self.assertEqual(stage.get("max_tokens"), 2048, f"{path}:{scenario}:{stage_key}")
+                        self.assertEqual(stage.get("max_tokens"), 6144, f"{path}:{scenario}:{stage_key}")
+
+    def test_bundled_two_stage_judges_use_6144_tokens(self):
+        from scripts.config import load_config
+
+        two_stage_scenarios = ("bugfix", "plan_review", "reasoning", "document")
+        paths = [
+            "skills/llm-fusion/assets/fusion_config.yaml",
+            "skills/llm-fusion/assets/fusion_config.yaml.example",
+        ]
+        for path in paths:
+            cfg = load_config(path)
+            for scenario in two_stage_scenarios:
+                judge = cfg["scenarios"][scenario]["judge"]
+                self.assertEqual(judge["stages"], "two", f"{path}:{scenario}")
+                self.assertEqual(judge["stage1"]["max_tokens"], 6144, f"{path}:{scenario}:stage1")
+                self.assertEqual(judge["stage2"]["max_tokens"], 6144, f"{path}:{scenario}:stage2")
 
     def test_get_cleaning_profile(self):
         from scripts.config import get_cleaning_profile
@@ -939,9 +1031,9 @@ class TestJudge(unittest.TestCase):
         from scripts.judge import _derive_judge_timeout
         api_cfg = {"timeout": {}}
         judge_cfg = {"max_completion_tokens": 2000}
-        # floor=60 (default), throughput=20, overhead=10 → 2000/20+10=110
+        # floor=90 (default), throughput=20, overhead=15 → 2000/20+15=115
         timeout = _derive_judge_timeout(judge_cfg, api_cfg)
-        self.assertEqual(timeout, 110)
+        self.assertEqual(timeout, 115)
 
     def test_derive_judge_timeout_with_flat_timeout_judge(self):
         """_derive_judge_timeout ignores legacy timeout_judge in favor of derived."""
@@ -977,6 +1069,18 @@ class TestJudge(unittest.TestCase):
         self.assertEqual(kwargs["max_tokens"], 2048)
         self.assertNotIn("max_completion_tokens", kwargs)
         self.assertNotIn("reasoning_mode", kwargs)
+        self.assertEqual(kwargs["extra_params"], {"thinking": {"type": "enabled"}})
+
+    def test_build_judge_llm_kwargs_mimo_missing_budget_defaults_to_4096(self):
+        from scripts.judge import _build_judge_llm_kwargs
+
+        kwargs = _build_judge_llm_kwargs({
+            "model": "mimo-v2.5",
+            "thinking": {"type": "enabled"},
+        })
+
+        self.assertEqual(kwargs["max_tokens"], 4096)
+        self.assertNotIn("max_completion_tokens", kwargs)
         self.assertEqual(kwargs["extra_params"], {"thinking": {"type": "enabled"}})
 
     def test_build_judge_llm_kwargs_deepseek_preserves_legacy_params(self):

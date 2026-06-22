@@ -154,16 +154,18 @@ user query
 ## Changelog
 
 ### v0.2.8 (current)
-- **Swapped judge model** — deepseek-v4-flash → mimo-v2.5 (temp=1.0, top_p=0.95, thinking.enabled, max_tokens=2048)
+- **Swapped judge model** — deepseek-v4-flash → mimo-v2.5 (temp=1.0, top_p=0.95, thinking.enabled, max_tokens=4096)
 - **Improved judge latency** — validated avg 8.8s vs 15-35s for deepseek-v4-flash
-- **Model-agnostic judge helpers** — `_merge_judge_call_config()`, `_build_judge_llm_kwargs()` support both Mimo and DeepSeek configs
-- **api_client.py** — Mimo thinking now configurable via `extra_params`; hardcoded disabled only applies when no explicit thinking param passed
-- **judge.py** — `_derive_judge_timeout()` handles both `max_tokens` and `max_completion_tokens`, plus `thinking.type` multiplier
-- **Config defaults** — `config.py`, `fusion_config.yaml`, `fusion_config.yaml.example` all updated to Mimo judge
-- **Pipeline metadata** — reports model-neutral judge config fields
-- **Backward compatible** — existing configs using `deepseek-v4-flash` as judge still work
-- 163 tests pass
-- Version bumped to 0.2.8
+- **Fixed empty-answer bug** — thinking tokens consumed entire 2048 budget; raised to 4096
+- **Token budget tune** — comprehensive review across all models and scenarios (see details below)
+- **Raised timeout ceilings** — `max_timeout` 90→360, `soft_deadline` 90→300, `judge_floor` 65→90, `panel_floor` 40→60, `overhead` 10→15
+- **Added scenario-specific Mimo panel budgets** — qa 800, general 1200, coding/bugfix/reasoning 2000, plan_review/creative 2500, document 3000
+- **Raised high-tier model defaults** — minimax-m3, qwen3.7-plus, deepseek-v4-pro: 2048→4096
+- **Raised two-stage judge stages** — bugfix/plan_review/reasoning/document: 4096→6144
+- **Config drift fixed** — active/example YAMLs now mirrored on timeouts and max_panel_response_chars
+- **Code fallbacks aligned** — Mimo judge default 2048→4096, high-tier defaults 2048→4096
+- **169 tests pass** (was 163)
+- No version bump (config/tuning changes on v0.2.8)
 
 ### v0.2.7
 - **Restructured tiers** — removed `min` and `low`, replaced with `low1` (1+1), `low2` (2+2), and `low3` (3+3)
