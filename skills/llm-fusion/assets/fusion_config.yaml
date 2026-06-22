@@ -20,6 +20,14 @@ fusion:
           max_tokens: 600
           thinking:
             type: disabled
+        - name: minimax-m3
+          count: 0
+          temp: 0.85
+          top_p: 0.9
+          top_k: 40
+          max_tokens: 2048
+          thinking:
+            type: adaptive
     judge:
       model: deepseek-v4-flash
       temp: 0.0
@@ -179,13 +187,20 @@ fusion:
   api:
     primary:
       endpoint: "https://opencode.ai/zen/go/v1/chat/completions"
-      timeout_panel: 30
-      timeout_judge: 60
+      timeout:
+        panel_floor: 30
+        judge_floor: 60
+        panel_throughput: 25
+        judge_throughput: 20
+        overhead_seconds: 10
+        max_timeout: 300
       retry:
         max_retries: 2
         delays_seconds: [1, 3]
 
   pipeline:
+    default_tier: low
     max_panel_workers: 6
     min_survivors: 2
+    soft_deadline_seconds: 180
     graceful_degradation: true

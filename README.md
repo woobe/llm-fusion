@@ -1,8 +1,8 @@
 # llm-fusion
 
-**Multi-scenario fusion pipeline for Hermes Agent** — dispatches 6 parallel LLM calls,
-cleans and deduplicates responses, and synthesizes a single superior answer using a
-judge model with chain-of-thought reasoning.
+**Multi-scenario fusion pipeline for Hermes Agent** — dispatches parallel LLM calls
+(tier-configurable panel), cleans and deduplicates responses, and synthesizes a single
+superior answer using a judge model with chain-of-thought reasoning.
 
 Supports 8 scenarios: `coding`, `bugfix`, `qa`, `plan_review`, `creative`,
 `reasoning`, `document`, `general`. Each scenario has its own temperature profile,
@@ -42,13 +42,14 @@ user query
     |
     v
 +-----------------------------+
-|  2. Panel (6 parallel)      |  ThreadPoolExecutor -- 3x deepseek + 3x mimo
-|     +-- deepseek-v4-flash   |  temperature varies per instance for diversity
-|     +-- deepseek-v4-flash   |
-|     +-- deepseek-v4-flash   |
-|     +-- mimo-v2.5           |
-|     +-- mimo-v2.5           |
-|     +-- mimo-v2.5           |
+|  2. Panel (tier-based)      |  ThreadPoolExecutor
+|     +> min   — 1 deepseek   |  number of calls depends on tier:
+|       + 1 mimo (2 total)    |     min    = 2 calls
+|     +> low   — 2 deepseek   |     low    = 4 calls (default)
+|       + 2 mimo (4 total)    |     medium = 5 calls
+|     +> medium — 2 deepseek  |  (deepseek-v4-flash + mimo-v2.5 +
+|       + 2 mimo + 1 minimax  |   minimax-m3 in medium only)
+|       (5 total)             |
 +-----------------------------+
     |
     v
@@ -61,6 +62,7 @@ user query
 +-----------------------------+
 |  4. Judge                   |  single or two-stage synthesis
 |     +> final answer         |  temp=0.0, high reasoning mode
+|   (unchanged by tier)       |  same judge config for all tiers
 +-----------------------------+
     |
     v
@@ -71,9 +73,23 @@ user query
 
 ## Changelog
 
-### v0.2.1 (current)
-- Fixed install.sh to use $HERMES_HOME for correct path resolution
-- Version bump from 0.2.0
+### v0.2.2 (current)
+- **Panel tier system** — `--tier min|low|medium` controls panel size
+  - `min`: 1 deepseek + 1 mimo (2 calls)
+  - `low`: 2 deepseek + 2 mimo (4 calls, default)
+  - `medium`: 2 deepseek + 2 mimo + 1 minimax-m3 (5 calls)
+- **MiniMax M3** — added as panel-only model in `medium` tier
+  - Settings: temp=0.85, top_p=0.9, top_k=40, thinking.type=adaptive
+  - Uses max_tokens (not max_completion_tokens)
+  - Validated with test calls
+- **Adaptive timeout** — timeout derived automatically per model from token budget
+  - Formula: `max(floor, tokens / throughput + overhead)`
+  - 1.5x multiplier for thinking models (adaptive/enabled modes)
+  - Pipeline soft deadline (180s default, configurable)
+  - Scales automatically when models are added or token budgets change
+- Judge config unchanged by tier (all tiers use same judge config)
+- Worker count adjusts dynamically to panel size
+- CLI now supports `--tier min|low|medium`
 
 ### v0.2
 - Removed src/llm_fusion/ duplication, all code in scripts/ only
@@ -133,15 +149,46 @@ review, reasoning) or a structured intermediate analysis improves the output
 
 ### Model Selection
 
-- **deepseek-v4-flash** -- primary model for panel and judge. Fast, supports
+| Role | Model | temp | top_p | Extra | Token Param |
+|---|---|---|---|---|---|
+| Panel (all tiers) | deepseek-v4-flash | 0.75 | 0.9 | — | max_completion_tokens |
+| Panel (all tiers) | mimo-v2.5 | 0.6/0.7/0.8 | 0.95 | thinking.type=disabled | max_tokens |
+| Panel (medium only) | minimax-m3 | 0.85 | 0.9 | top_k=40, thinking.type=adaptive | max_tokens |
+| Judge (all tiers) | deepseek-v4-flash | 0.0 | 1.0 | reasoning_mode=high | max_completion_tokens |
+
+- **deepseek-v4-flash** — primary model for panel and judge. Fast, supports
   reasoning_mode for chain-of-thought, strong coding and reasoning capabilities.
-- **mimo-v2.5** -- secondary panel model. Cheaper, adds diversity at marginal
+- **mimo-v2.5** — secondary panel model. Cheaper, adds diversity at marginal
   cost. Panel-only role (never makes synthesis decisions).
+- **minimax-m3** — panel-only model, active only in `medium` tier. Provides
+  additional diversity with adaptive thinking at temp=0.85.
 
 ### opencode.go Focus
 
 The pipeline targets OpenCode Go (https://opencode.ai/zen/go/v1) as its
 primary LLM provider. May expand to more providers in future versions.
+
+### Adaptive Timeout (Why per-model timeouts?)
+
+Different models and scenarios have different response-time profiles. A
+simple uniform timeout wastes time on fast models (waiting needlessly) or
+causes premature failures on models with large token budgets. The pipeline
+derives timeouts dynamically:
+
+- **Formula**: `timeout = max(floor, token_budget / throughput + overhead)`
+  where throughput and overhead are configurable per provider.
+- **Thinking multiplier**: Models with `thinking.type=adaptive` or
+  `thinking.type=enabled` get a 1.5x multiplier because thinking/CoT
+  responses take significantly longer per token.
+- **Explicit override**: Any model entry can set a literal `timeout`
+  field which bypasses the formula entirely.
+- **Pipeline soft deadline**: An overall deadline (default 180s) guards
+  the whole pipeline. If exceeded, the pipeline either errors or falls
+  back to a direct single-call response depending on the
+  `graceful_degradation` setting.
+
+This design scales automatically when new models are added or token
+budgets change — no manual timeout tuning per model.
 
 ---
 
@@ -171,7 +218,14 @@ llm-fusion/
 ### Run from command line
 
 ```bash
+# Run with default (low) tier
 PYTHONPATH=skills/llm-fusion python3 -m scripts --query "What is 2+2?" --verbose
+
+# Choose a different tier (min / low / medium)
+PYTHONPATH=skills/llm-fusion python3 -m scripts --query "What is 2+2?" --tier medium --verbose
+
+# Dry-run to validate config and arguments
+PYTHONPATH=skills/llm-fusion python3 -m scripts --dry-run --query "test" --tier min
 ```
 
 ### Run tests

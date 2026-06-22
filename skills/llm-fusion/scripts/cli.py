@@ -8,7 +8,7 @@ import argparse
 import json
 
 
-VERSION = "0.1.0"
+VERSION = "0.2.2"
 
 
 def build_parser():
@@ -35,6 +35,11 @@ def build_parser():
         "--verbose", "-v",
         action="store_true",
         help="Print progress information to stderr.",
+    )
+    parser.add_argument(
+        "--tier", "-t",
+        default="low",
+        help="Panel model tier: min (2 calls), low (4 calls, default), medium (5 calls).",
     )
     parser.add_argument(
         "--dry-run",
@@ -71,6 +76,7 @@ def main(argv=None):
             "config": resolved_config,
             "output_dir": args.output_dir,
             "verbose": args.verbose,
+            "tier": args.tier,
         }
         print(json.dumps(info, indent=2))
         return 0
@@ -86,6 +92,7 @@ def main(argv=None):
         config_path=args.config,
         output_dir=args.output_dir,
         verbose=args.verbose,
+        tier=args.tier,
     )
 
     output = format_for_chat(result, include_metadata=True)

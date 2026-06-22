@@ -3,7 +3,7 @@
 Coordinates the full fusion pipeline:
 1. Classify query
 2. Resolve scenario config
-3. Dispatch panel (6 parallel calls)
+3. Dispatch panel (parallel calls, tier-aware)
 4. Clean responses
 5. Judge (single or two-stage)
 6. Format and return output
@@ -14,7 +14,7 @@ Never raises exceptions.
 import sys
 import time
 
-from scripts.config import load_config, get_scenario_config
+from scripts.config import load_config, get_scenario_config, normalize_tier
 from scripts.classifier import classify_query
 from scripts.panel import dispatch_panel
 from scripts.cleaner import clean_panel_responses
@@ -22,7 +22,7 @@ from scripts.judge import judge_single_stage, judge_two_stage
 from scripts.output import format_for_chat, save_output
 
 
-def run_pipeline(query, config_path=None, output_dir=None, verbose=False):
+def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=None):
     """Run the full fusion pipeline on a user query.
 
     Parameters
@@ -35,6 +35,8 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False):
         Directory for saving output JSON. If None, no file is saved.
     verbose : bool
         Print progress information if True.
+    tier : str or None
+        Panel tier (``min``, ``low``, ``medium``, or ``None`` for default).
 
     Returns
     -------
@@ -47,6 +49,10 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False):
     Never raises.
     """
     start = time.monotonic()
+
+    # Normalize tier once near the top
+    normalized_tier = normalize_tier(tier)
+
     result = {
         "success": False,
         "answer": None,
@@ -54,6 +60,7 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False):
         "scenario": "general",
         "metadata": {
             "level": "low",
+            "tier": normalized_tier,
             "pipeline_version": "2.0.0",
             "classification": {},
             "panel": {
@@ -83,6 +90,47 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False):
         if verbose:
             print("[pipeline] Warning: Using default config (no config file loaded)", file=sys.stderr)
 
+    # Pipeline soft deadline
+    pipeline_cfg = config.get("pipeline", {}) if config else {}
+    soft_deadline = pipeline_cfg.get("soft_deadline_seconds", 0)
+
+    def _check_deadline(phase):
+        """Check if pipeline has exceeded the soft deadline.
+
+        Returns the result dict (triggering early return with fallback)
+        if the deadline is exceeded, or None to continue normally.
+
+        When ``graceful_degradation`` is false, returns an error instead
+        of attempting a fallback call.
+        """
+        if soft_deadline <= 0:
+            return None
+        elapsed = time.monotonic() - start
+        if elapsed < soft_deadline:
+            return None
+        # Deadline exceeded — flag metadata
+        result["metadata"]["deadline_exceeded"] = True
+        if verbose:
+            print(f"[pipeline] Soft deadline ({soft_deadline}s) exceeded during {phase}",
+                  file=sys.stderr)
+        if not graceful:
+            result["error"] = f"Soft deadline ({soft_deadline}s) exceeded during {phase}"
+            result["elapsed"] = elapsed
+            return result
+        if verbose:
+            print(f"[pipeline] Falling back to direct call", file=sys.stderr)
+        direct_result = _direct_fallback(query, config)
+        if direct_result["success"]:
+            result["success"] = True
+            result["answer"] = direct_result.get("content")
+            result["reasoning_content"] = direct_result.get("reasoning_content")
+            result["metadata"]["level"] = "low"
+            result["metadata"]["judge"] = {"mode": "direct_fallback"}
+        else:
+            result["error"] = f"Deadline exceeded during {phase}, fallback also failed"
+            result["elapsed"] = elapsed
+        return result
+
     # --- Step 1: Classify ---
     t0 = time.monotonic()
     classification = classify_query(query, config)
@@ -96,17 +144,27 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False):
               f"method={classification.get('detection_method')}, "
               f"reason={classification.get('reason')})")
 
+    deadline_check = _check_deadline("classification")
+    if deadline_check:
+        return deadline_check
+
     # --- Step 2: Resolve scenario config ---
-    scenario_cfg = get_scenario_config(config, scenario_id)
-    pipeline_cfg = config.get("pipeline", {}) if config else {}
+    scenario_cfg = get_scenario_config(config, scenario_id, tier=normalized_tier)
     graceful = pipeline_cfg.get("graceful_degradation", True)
 
     # --- Step 3: Dispatch panel ---
     t0 = time.monotonic()
+    # Count expected parallel calls from scenario models
+    panel_models = scenario_cfg.get("panel", {}).get("models", [])
+    expected_calls = sum(m.get("count", 0) for m in panel_models)
     if verbose:
-        print("[pipeline] Dispatching panel (6 parallel calls)...")
-    panel_result = dispatch_panel(query, scenario_id, config=config)
+        print(f"[pipeline] Dispatching panel ({expected_calls} parallel calls, tier={normalized_tier})...")
+    panel_result = dispatch_panel(query, scenario_id, config=config, tier=normalized_tier)
     t_panel = time.monotonic() - t0
+
+    deadline_check = _check_deadline("panel")
+    if deadline_check:
+        return deadline_check
 
     panel_metrics = {
         "models_attempted": len(panel_result.get("responses", [])),
@@ -171,6 +229,10 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False):
         print(f"[pipeline] Cleaning: {survived} survived, "
               f"{cleaning_result.get('discarded_count', 0)} discarded "
               f"in {t_clean*1000:.0f}ms")
+
+    deadline_check = _check_deadline("cleaning")
+    if deadline_check:
+        return deadline_check
 
     if survived < pipeline_cfg.get("min_survivors", 2):
         if not graceful:
@@ -277,6 +339,10 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False):
         # Set level based on judge success
         result["metadata"]["level"] = "high" if judge_result.get("success") else "low"
 
+    deadline_check = _check_deadline("judge")
+    if deadline_check:
+        return deadline_check
+
     # --- Timing ---
     total_elapsed = time.monotonic() - start
     result["metadata"]["timing_ms"] = {
@@ -310,6 +376,10 @@ def _direct_fallback(query, config):
     if config and isinstance(config, dict):
         api_cfg = config.get("api", {}).get("primary", {})
         endpoint = api_cfg.get("endpoint")
+        timeout_cfg = api_cfg.get("timeout", {})
+        fb_timeout = timeout_cfg.get("judge_floor", 60)
+    else:
+        fb_timeout = 60
 
     return call_llm_with_retry(
         prompt=query,
@@ -317,7 +387,7 @@ def _direct_fallback(query, config):
         temperature=0.75,
         top_p=0.9,
         max_completion_tokens=2000,
-        timeout=api_cfg.get("timeout_judge", 60),
+        timeout=fb_timeout,
         endpoint=endpoint,
         retries=1,
         delays=(2,),

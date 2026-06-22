@@ -194,6 +194,74 @@ JUDGE_SYSTEM_PROMPTS_STAGE2 = {
 }
 
 
+def _derive_judge_timeout(judge_config, api_cfg):
+    """Derive judge timeout from max_completion_tokens using config formula.
+
+    Computes timeout for each stage (single-stage config, stage1, stage2)
+    and returns the maximum — ensures sufficient time for the longest call.
+
+    Formula: timeout = max(floor, max_completion_tokens / throughput + overhead)
+    - Applies reasoning_mode multiplier: 'high' → 1.5x, 'max' → 2x
+    - Supports two-stage judges via stage1/stage2 sub-keys
+
+    Parameters
+    ----------
+    judge_config : dict
+        Judge-specific config with max_completion_tokens, reasoning_mode,
+        and optional stage1/stage2 sub-dicts.
+    api_cfg : dict
+        The api.primary config dict containing timeout sub-dict.
+
+    Returns
+    -------
+    int
+        Timeout in seconds.
+    """
+    timeout_cfg = api_cfg.get("timeout", {}) if api_cfg else {}
+    floor = timeout_cfg.get("judge_floor", 60)
+    throughput = timeout_cfg.get("judge_throughput", 20)
+    overhead = timeout_cfg.get("overhead_seconds", 10)
+    max_timeout = timeout_cfg.get("max_timeout", 300)
+
+    def _compute(raw_budget, raw_reasoning):
+        """Compute timeout for a single stage given token budget and reasoning_mode."""
+        if raw_budget > 0:
+            raw = raw_budget / throughput + overhead
+        else:
+            raw = floor
+        rm = (raw_reasoning or "").lower()
+        if rm == "max":
+            raw *= 2.0
+        elif rm == "high":
+            raw *= 1.5
+        return raw
+
+    candidates = []
+
+    # Single-stage config (top-level)
+    top_budget = judge_config.get("max_completion_tokens", 0)
+    top_reasoning = judge_config.get("reasoning_mode", "")
+    candidates.append(_compute(top_budget, top_reasoning))
+
+    # Two-stage: stage1 sub-config
+    stage1 = judge_config.get("stage1", {})
+    if stage1 and isinstance(stage1, dict):
+        s1_budget = stage1.get("max_completion_tokens", 0)
+        s1_reasoning = stage1.get("reasoning_mode", top_reasoning)
+        candidates.append(_compute(s1_budget, s1_reasoning))
+
+    # Two-stage: stage2 sub-config
+    stage2 = judge_config.get("stage2", {})
+    if stage2 and isinstance(stage2, dict):
+        s2_budget = stage2.get("max_completion_tokens", 0)
+        s2_reasoning = stage2.get("reasoning_mode", top_reasoning)
+        candidates.append(_compute(s2_budget, s2_reasoning))
+
+    raw_timeout = max(candidates)
+    timeout = max(floor, int(raw_timeout))
+    return min(timeout, max_timeout)
+
+
 def judge_single_stage(query, responses, scenario_id, config=None, judge_config=None):
     """Run a single-stage judge synthesis.
 
@@ -258,7 +326,7 @@ def judge_single_stage(query, responses, scenario_id, config=None, judge_config=
     )
 
     api_cfg = (config or {}).get("api", {}).get("primary", {})
-    timeout = api_cfg.get("timeout_judge", 60)
+    timeout = _derive_judge_timeout(judge_config, api_cfg)
     endpoint = api_cfg.get("endpoint")
 
     llm_result = call_llm_with_retry(
@@ -340,7 +408,7 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
     stage2_config = judge_config.get("stage2", {})
 
     api_cfg = (config or {}).get("api", {}).get("primary", {})
-    timeout = api_cfg.get("timeout_judge", 60)
+    timeout = _derive_judge_timeout(judge_config, api_cfg)
     endpoint = api_cfg.get("endpoint")
     model = judge_config.get("model", "deepseek-v4-flash")
 

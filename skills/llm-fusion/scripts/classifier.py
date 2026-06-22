@@ -295,6 +295,11 @@ def _llm_classifier(query, config):
         temperature = cls_config.get("llm_temp", 0.0)
         max_tokens = cls_config.get("llm_max_tokens", 50)
 
+        # Read timeout from config timeout block, fall back to panel_floor
+        api_cfg = config.get("api", {}).get("primary", {}) if config else {}
+        timeout_cfg = api_cfg.get("timeout", {})
+        cls_timeout = timeout_cfg.get("panel_floor", 30)
+
         prompt = (
             "Classify this query into one: coding|bugfix|qa|plan_review|creative|reasoning|document|general. "
             "Answer with one word only.\n\n"
@@ -307,7 +312,7 @@ def _llm_classifier(query, config):
             temperature=temperature,
             top_p=1.0,
             max_completion_tokens=max_tokens,
-            timeout=30,
+            timeout=cls_timeout,
         )
 
         if result["success"] and result["content"]:

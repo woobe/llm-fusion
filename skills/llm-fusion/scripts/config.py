@@ -12,6 +12,162 @@ try:
 except ImportError:
     yaml = None  # type: ignore[assignment]
 
+# ---------------------------------------------------------------------------
+# Panel tier system — hardcoded fallback when config has no tiers key
+# ---------------------------------------------------------------------------
+
+TIER_MAP = {
+    "min": {"deepseek-v4-flash": 1, "mimo-v2.5": 1},
+    "low": {"deepseek-v4-flash": 2, "mimo-v2.5": 2},
+    "medium": {"deepseek-v4-flash": 2, "mimo-v2.5": 2, "minimax-m3": 1},
+}
+
+MINIMAX_DEFAULTS = {
+    "name": "minimax-m3",
+    "count": 0,
+    "temp": 0.85,
+    "top_p": 0.9,
+    "top_k": 40,
+    "max_tokens": 2048,
+    "thinking": {"type": "adaptive"},
+}
+
+VALID_TIERS = frozenset(TIER_MAP.keys())
+
+
+def normalize_tier(tier):
+    """Normalize a tier value; defaults to 'low' on None or invalid input.
+
+    Never raises — falls back to ``low`` for any unrecognised value.
+    """
+    if tier is not None and isinstance(tier, str) and tier in VALID_TIERS:
+        return tier
+    return "low"
+
+
+def _apply_tier_counts(models, tier):
+    """Apply *tier* model counts to an existing models list.
+
+    For each model entry in the tier map the function updates the ``count``
+    field of the matching model entry already in the list.  If a model from
+    the tier map is not present (e.g. minimax-m3), a new entry with sensible
+    defaults is appended.
+
+    Models that are not covered by the tier map keep their original count.
+    Never raises.
+    """
+    tier_map = TIER_MAP.get(tier, TIER_MAP["low"])
+    updated = []
+
+    seen = set()
+    for entry in models:
+        name = entry.get("name", "")
+        if name in tier_map:
+            entry["count"] = tier_map[name]
+            seen.add(name)
+        updated.append(entry)
+
+    # Add models from the tier map that were not in the original list
+    for name, count in tier_map.items():
+        if name not in seen:
+            if name == "minimax-m3":
+                entry = dict(MINIMAX_DEFAULTS)
+                entry["count"] = count
+            else:
+                entry = {"name": name, "count": count}
+            updated.append(entry)
+
+    return updated
+
+
+def resolve_tier_models(panel_cfg, tier="low"):
+    """Resolve a tier-based model list from *panel_cfg*.
+
+    If *panel_cfg* contains a ``tiers`` key, the function builds the model
+    list from the tier definition (model name + count) merged with
+    ``model_defaults`` from the config.
+
+    If the ``tiers`` key is absent the function falls back to the legacy
+    ``models`` list (if present), then applies the hardcoded ``TIER_MAP``
+    counts on top so that the tier argument still changes call volumes.
+
+    Parameters
+    ----------
+    panel_cfg : dict
+        The ``default.panel`` section of the fusion config.
+    tier : str
+        One of ``"min"``, ``"low"``, or ``"medium"``. Unknown tiers fall
+        back to ``"low"``.
+
+    Returns
+    -------
+    list[dict]
+        Model entries with full parameters merged. Never returns None.
+    """
+    tier = normalize_tier(tier)
+    config_tiers = panel_cfg.get("tiers")
+    model_defaults = panel_cfg.get("model_defaults", {})
+
+    if config_tiers is not None:
+        # Use config-specified tiers
+        tier_defs = config_tiers.get(tier, config_tiers.get("low", []))
+        models = []
+        for entry in tier_defs:
+            name = entry["name"]
+            count = entry.get("count", 1)
+            defaults = model_defaults.get(name, {})
+            model_entry = {"name": name, "count": count}
+            model_entry.update(defaults)
+            models.append(model_entry)
+        return models
+
+    # No config tiers — use legacy models list (if any) + TIER_MAP override
+    legacy = panel_cfg.get("models", [])
+    return _apply_tier_counts(legacy, tier)
+
+
+# Map of scenario panel keys -> full model names
+_MODEL_NAME_MAP = {
+    "deepseek": "deepseek-v4-flash",
+    "mimo": "mimo-v2.5",
+    "minimax": "minimax-m3",
+}
+
+
+def _apply_scenario_overrides(models, scenario_panel):
+    """Apply scenario-specific parameter overrides on a resolved model list.
+
+    Iterates over the resolved *models* list and overrides parameters from
+    *scenario_panel* entries (keyed by short names such as ``deepseek`` or
+    ``mimo``). Preserves ``count`` and ``name``. Mutates entries in place.
+
+    Parameters
+    ----------
+    models : list[dict]
+        Resolved model entries (from ``resolve_tier_models`` or legacy).
+    scenario_panel : dict
+        The ``panel`` sub-dict from a scenario config (may be empty).
+
+    Returns
+    -------
+    list[dict]
+        The same list, updated in place.
+    """
+    if not scenario_panel or not models:
+        return models
+
+    for alias, full_name in _MODEL_NAME_MAP.items():
+        if alias not in scenario_panel:
+            continue
+        overrides = scenario_panel[alias]
+        for m in models:
+            if m.get("name") == full_name:
+                for k, v in overrides.items():
+                    if k not in ("name", "count"):
+                        m[k] = v
+                break
+    return models
+
 
 def _discover_config_path():
     """Walk the portable config discovery order and return first path found.
@@ -109,15 +265,129 @@ def load_config(path=None):
     return {}
 
 
-def get_scenario_config(config, scenario_id):
-    """Get merged scenario config (scenario-specific over default).
+# Map of scenario panel keys → full model names
+_MODEL_NAME_MAP = {
+    "deepseek": "deepseek-v4-flash",
+    "mimo": "mimo-v2.5",
+    "minimax": "minimax-m3",
+}
+
+
+def resolve_tier_models(panel_cfg, tier="low"):
+    """Resolve a tier-based model list from panel config.
+
+    Supports two formats:
+
+    1. **New format** — *panel_cfg* has ``tiers`` and ``model_defaults``
+       keys.  Builds model entries by combining the tier definition (model
+       name + count) with base parameters from ``model_defaults``.
+    2. **Legacy format** — *panel_cfg* has a plain ``models`` list.  Uses
+       the canonical :data:`TIER_MAP` to override counts.
+
+    If neither key exists, falls back to :data:`TIER_MAP` for the
+    requested tier.
+
+    Parameters
+    ----------
+    panel_cfg : dict
+        The ``default.panel`` section of the fusion config (or a sub-dict
+        containing keys ``tiers``, ``model_defaults``, and/or ``models``).
+    tier : str
+        One of ``"min"``, ``"low"``, or ``"medium"``.  Falls back to
+        ``"low"`` when the requested tier is missing from the config.
+
+    Returns
+    -------
+    list[dict]
+        Model entries with full parameters merged. Never returns None.
+    """
+    base_tier = normalize_tier(tier)
+    tier_defs = None
+
+    # 1. Try new ``tiers`` key
+    if "tiers" in panel_cfg:
+        tiers = panel_cfg["tiers"]
+        tier_defs = tiers.get(base_tier, tiers.get("low", []))
+
+    if tier_defs is not None:
+        # New format: merge with model_defaults
+        model_defaults = panel_cfg.get("model_defaults", {})
+        models = []
+        for entry in tier_defs:
+            name = entry["name"]
+            count = entry.get("count", 1)
+            defaults = model_defaults.get(name, {})
+            model_entry = {"name": name, "count": count}
+            model_entry.update(defaults)
+            models.append(model_entry)
+        return models
+
+    # 2. Legacy ``models`` list – apply TIER_MAP counts
+    legacy_models = panel_cfg.get("models")
+    if legacy_models is not None:
+        return _apply_tier_counts(list(legacy_models), base_tier)
+
+    # 3. Nothing at all – return TIER_MAP defaults
+    tier_map = TIER_MAP.get(base_tier, TIER_MAP["low"])
+    return [{"name": name, "count": count} for name, count in tier_map.items()]
+
+
+def _apply_scenario_overrides(models, scenario_panel):
+    """Apply scenario-specific parameter overrides on a resolved model list.
+
+    Iterates over the resolved *models* list and overrides parameters from
+    *scenario_panel* entries (keyed by short names such as ``deepseek`` or
+    ``mimo``). Preserves ``count`` and ``name``. Mutates entries in place.
+
+    Parameters
+    ----------
+    models : list[dict]
+        Resolved model entries (from ``resolve_tier_models`` or legacy).
+    scenario_panel : dict
+        The ``panel`` sub-dict from a scenario config (may be empty).
+
+    Returns
+    -------
+    list[dict]
+        The same list, updated in place.
+    """
+    if not scenario_panel or not models:
+        return models
+
+    for alias, full_name in _MODEL_NAME_MAP.items():
+        if alias not in scenario_panel:
+            continue
+        overrides = scenario_panel[alias]
+        for m in models:
+            if m.get("name") == full_name:
+                # Apply overrides but keep structural fields intact
+                for k, v in overrides.items():
+                    if k not in ("name", "count"):
+                        m[k] = v
+                break
+    return models
+
+
+def get_scenario_config(config, scenario_id, tier=None):
+    """Get merged scenario config (scenario-specific over default), with tier.
+
+    Parameters
+    ----------
+    config : dict
+        Full fusion config.
+    scenario_id : str
+        One of the known scenario identifiers.
+    tier : str or None
+        Panel tier (``min``, ``low``, ``medium``, or ``None`` for default).
 
     Returns a flat dict with keys: panel (dict), judge (dict), cleaning (dict),
     conciseness_suffix (str).
     Never raises — falls back to 'general' or a sensible empty dict.
     """
     if not config or not isinstance(config, dict):
-        return _default_scenario_config()
+        cfg = _default_scenario_config()
+        cfg["panel"]["models"] = _apply_tier_counts(cfg["panel"]["models"], tier)
+        return cfg
 
     default_panel = config.get("default", {}).get("panel", {})
     default_judge = config.get("default", {}).get("judge", {})
@@ -126,54 +396,17 @@ def get_scenario_config(config, scenario_id):
     scenario = scenarios.get(scenario_id, scenarios.get("general", {}))
 
     if not scenario:
-        return _default_scenario_config()
+        cfg = _default_scenario_config()
+        cfg["panel"]["models"] = _apply_tier_counts(cfg["panel"]["models"], tier)
+        return cfg
 
-    # Build panel config
+    # Build panel config with tier resolution
     panel_config = dict(default_panel)
-    scenario_panel = scenario.get("panel", {})
-    if scenario_panel:
-        # Merge deepseek settings
-        if "deepseek" in scenario_panel:
-            if "models" not in panel_config:
-                panel_config["models"] = []
-            ds = scenario_panel["deepseek"]
-            # Override the deepseek model entry
-            ds_model = {
-                "name": "deepseek-v4-flash",
-                "count": 3,
-                "temp": ds.get("temp", 0.75),
-                "top_p": default_judge.get("top_p", 0.9),
-                "max_completion_tokens": ds.get("max_completion_tokens", 2000),
-            }
-            # Replace or append
-            found = False
-            for m in panel_config.get("models", []):
-                if m.get("name") == "deepseek-v4-flash":
-                    m.update(ds_model)
-                    found = True
-                    break
-            if not found:
-                panel_config.setdefault("models", []).append(ds_model)
+    panel_config["models"] = resolve_tier_models(panel_config, tier)
 
-        # Merge mimo settings
-        if "mimo" in scenario_panel:
-            mimo = scenario_panel["mimo"]
-            mimo_model = {
-                "name": "mimo-v2.5",
-                "count": 3,
-                "temps": mimo.get("temps", [0.6, 0.7, 0.8]),
-                "top_p": 0.95,
-                "max_tokens": mimo.get("max_tokens", 600),
-                "thinking": {"type": "disabled"},
-            }
-            found = False
-            for m in panel_config.get("models", []):
-                if m.get("name") == "mimo-v2.5":
-                    m.update(mimo_model)
-                    found = True
-                    break
-            if not found:
-                panel_config.setdefault("models", []).append(mimo_model)
+    # Apply scenario overrides on top (preserves count and name)
+    scenario_panel = scenario.get("panel", {})
+    _apply_scenario_overrides(panel_config.get("models", []), scenario_panel)
 
     # Build judge config
     judge_config = dict(default_judge)

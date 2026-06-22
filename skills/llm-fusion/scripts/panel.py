@@ -1,7 +1,7 @@
 """Panel dispatch for llm-fusion.
 
-Dispatches 6 parallel LLM calls (3x deepseek-v4-flash, 3x mimo-v2.5)
-with scenario-specific temperatures and token budgets.
+Dispatches parallel LLM calls with scenario-specific temperatures,
+token budgets, and tier-based model counts.
 Uses stdlib's concurrent.futures.ThreadPoolExecutor for parallelism.
 Never raises exceptions.
 """
@@ -18,8 +18,132 @@ from scripts.classifier import CONCISENESS_SUFFIXES
 SYSTEM_PROMPT = "You are a knowledgeable assistant. Answer directly."
 
 
-def dispatch_panel(query, scenario_id, config=None, max_workers=6):
-    """Dispatch 6 parallel panel calls for a given scenario.
+def _derive_timeout(model_entry, timeout_cfg):
+    """Derive a per-model timeout from token budget using the config formula.
+
+    Formula: timeout = max(floor, token_budget / throughput + overhead)
+    - If model has thinking.type=adaptive or enabled, multiply by 1.5x
+    - If model has an explicit ``timeout`` field, use that directly
+    - Falls back to ``timeout_cfg.panel_floor`` if no token budget found
+
+    Parameters
+    ----------
+    model_entry : dict
+        The model config entry (may contain max_tokens, max_completion_tokens,
+        thinking, and an optional ``timeout`` field).
+    timeout_cfg : dict
+        Timeout configuration with keys: panel_floor, panel_throughput,
+        overhead_seconds, max_timeout.
+
+    Returns
+    -------
+    int
+        Timeout in seconds.
+    """
+    # If model has an explicit timeout, use it directly
+    explicit = model_entry.get("timeout")
+    if explicit is not None and isinstance(explicit, (int, float)):
+        return int(explicit)
+
+    floor = timeout_cfg.get("panel_floor", 30)
+    throughput = timeout_cfg.get("panel_throughput", 25)
+    overhead = timeout_cfg.get("overhead_seconds", 10)
+    max_timeout = timeout_cfg.get("max_timeout", 300)
+
+    # Determine token budget
+    token_budget = (
+        model_entry.get("max_completion_tokens")
+        or model_entry.get("max_tokens")
+        or 0
+    )
+
+    if token_budget > 0:
+        raw_timeout = token_budget / throughput + overhead
+    else:
+        raw_timeout = floor
+
+    # Apply thinking multiplier if model uses adaptive/enabled thinking
+    thinking = model_entry.get("thinking")
+    if thinking and isinstance(thinking, dict):
+        thinking_type = thinking.get("type", "")
+        if thinking_type in ("adaptive", "enabled"):
+            raw_timeout *= 1.5
+
+    timeout = max(floor, int(raw_timeout))
+    return min(timeout, max_timeout)
+
+
+def _build_call_specs(models_list, user_prompt, config):
+    """Build a list of call specification dicts from model entries.
+
+    Skips entries where ``count`` is None or ≤ 0.
+    Passes ``top_k`` via ``extra_params`` if present.
+    Never raises.
+
+    Returns
+    -------
+    list[dict]
+        Each dict has keys: label, model, temperature, top_p,
+        max_tokens, max_completion_tokens, timeout, endpoint,
+        and optionally extra_params.
+    """
+    api_cfg = config.get("api", {})
+    primary_cfg = api_cfg.get("primary", {})
+    timeout_cfg = primary_cfg.get("timeout", {})
+    endpoint = primary_cfg.get("endpoint")
+
+    call_specs = []
+    for model_entry in models_list:
+        model_name = model_entry.get("name", "deepseek-v4-flash")
+        count = model_entry.get("count", 1)
+
+        # Skip entries with count <= 0
+        if count is None or count <= 0:
+            continue
+
+        temp = model_entry.get("temp")
+        temps = model_entry.get("temps")
+        top_p = model_entry.get("top_p", 0.9)
+        max_tokens = model_entry.get("max_tokens")
+        max_completion = model_entry.get("max_completion_tokens")
+        thinking = model_entry.get("thinking")
+        top_k = model_entry.get("top_k")
+
+        # Derive per-model adaptive timeout
+        model_timeout = _derive_timeout(model_entry, timeout_cfg)
+
+        for i in range(count):
+            label = f"{model_name} #{i + 1}"
+            call_temp = temp
+            if temps and isinstance(temps, list) and i < len(temps):
+                call_temp = temps[i]
+            elif call_temp is None:
+                call_temp = 0.75  # default fallback
+
+            spec = {
+                "label": label,
+                "model": model_name,
+                "temperature": call_temp,
+                "top_p": top_p,
+                "max_tokens": max_tokens,
+                "max_completion_tokens": max_completion,
+                "timeout": model_timeout,
+                "endpoint": endpoint,
+            }
+            extra = {}
+            if thinking:
+                extra["thinking"] = thinking
+            if top_k is not None:
+                extra["top_k"] = top_k
+            if extra:
+                spec["extra_params"] = extra
+            call_specs.append(spec)
+
+    return call_specs
+
+
+def dispatch_panel(query, scenario_id, config=None, max_workers=None, tier=None):
+    """Dispatch parallel panel calls for a given scenario.
 
     Parameters
     ----------
@@ -29,8 +153,12 @@ def dispatch_panel(query, scenario_id, config=None, max_workers=6):
         One of the 8 scenario identifiers.
     config : dict or None
         Full fusion config dict. Loaded via load_config() if None.
-    max_workers : int
-        Thread pool size (default 6).
+    max_workers : int or None
+        Thread pool size. If ``None``, computed as
+        ``min(len(call_specs), config.pipeline.max_panel_workers)``
+        with a minimum of 1.
+    tier : str or None
+        Panel tier (``min``, ``low``, ``medium``, or ``None`` for default).
 
     Returns
     -------
@@ -62,7 +190,7 @@ def dispatch_panel(query, scenario_id, config=None, max_workers=6):
     if not config:
         config = {}
 
-    scenario_cfg = get_scenario_config(config, scenario_id)
+    scenario_cfg = get_scenario_config(config, scenario_id, tier=tier)
     result["config_used"] = scenario_cfg
 
     panel_cfg = scenario_cfg.get("panel", {})
@@ -87,42 +215,22 @@ def dispatch_panel(query, scenario_id, config=None, max_workers=6):
     retry_cfg = primary_cfg.get("retry", {})
     max_retries = retry_cfg.get("max_retries", 2)
     delays = retry_cfg.get("delays_seconds", [1, 3])
-    timeout_panel = primary_cfg.get("timeout_panel", 30)
-    endpoint = primary_cfg.get("endpoint")
 
     # Build the list of call specifications
-    call_specs = []
-    for model_entry in models_list:
-        model_name = model_entry.get("name", "deepseek-v4-flash")
-        count = model_entry.get("count", 1)
-        temp = model_entry.get("temp")
-        temps = model_entry.get("temps")
-        top_p = model_entry.get("top_p", 0.9)
-        max_tokens = model_entry.get("max_tokens")
-        max_completion = model_entry.get("max_completion_tokens")
-        thinking = model_entry.get("thinking")
+    call_specs = _build_call_specs(models_list, user_prompt, config)
 
-        for i in range(count):
-            label = f"{model_name} #{i + 1}"
-            call_temp = temp
-            if temps and isinstance(temps, list) and i < len(temps):
-                call_temp = temps[i]
-            elif call_temp is None:
-                call_temp = 0.75  # default fallback
+    if not call_specs:
+        result["success"] = False
+        result["elapsed"] = time.monotonic() - start
+        return result
 
-            spec = {
-                "label": label,
-                "model": model_name,
-                "temperature": call_temp,
-                "top_p": top_p,
-                "max_tokens": max_tokens,
-                "max_completion_tokens": max_completion,
-                "timeout": timeout_panel,
-                "endpoint": endpoint,
-            }
-            if thinking:
-                spec["extra_params"] = {"thinking": thinking}
-            call_specs.append(spec)
+    # Determine worker count if not provided
+    if max_workers is None:
+        pipeline_cfg = config.get("pipeline", {})
+        max_allowed = pipeline_cfg.get("max_panel_workers", 6)
+        max_workers = min(len(call_specs), max_allowed)
+        if max_workers < 1:
+            max_workers = 1
 
     # Execute calls in parallel via ThreadPoolExecutor
     futures = {}

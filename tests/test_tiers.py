@@ -1,0 +1,481 @@
+"""Tests for the panel tier system.
+
+Tests cover:
+  - normalize_tier() helper
+  - TIER_MAP counts
+  - get_scenario_config(..., tier=...) producing correct counts
+  - Judge config unchanged across tiers
+  - Panel dispatch with tier (count<=0 skip, top_k passthrough)
+  - CLI --tier argument in dry-run
+"""
+
+import unittest
+from unittest import mock
+
+
+class TestTierConfig(unittest.TestCase):
+    """Test the tier map and normalize_tier helper."""
+
+    def setUp(self):
+        self.minimal_config = {
+            "version": "2.0.0",
+            "default": {
+                "panel": {
+                    "models": [
+                        {"name": "deepseek-v4-flash", "count": 3, "temp": 0.75, "top_p": 0.9},
+                        {"name": "mimo-v2.5", "count": 3, "temps": [0.6, 0.7, 0.8], "top_p": 0.95},
+                    ],
+                },
+                "judge": {"model": "deepseek-v4-flash", "temp": 0.0, "top_p": 1.0},
+            },
+            "scenarios": {
+                "coding": {
+                    "panel": {"deepseek": {"temp": 0.5, "max_completion_tokens": 2000}},
+                    "judge": {"stages": "single", "reasoning_mode": "max", "max_completion_tokens": 16000},
+                },
+                "general": {
+                    "panel": {"deepseek": {"temp": 0.75, "max_completion_tokens": 800}},
+                    "judge": {"stages": "single", "reasoning_mode": "high", "max_completion_tokens": 8000},
+                },
+            },
+            "pipeline": {
+                "max_panel_workers": 6,
+                "min_survivors": 2,
+                "graceful_degradation": True,
+            },
+        }
+
+    def test_normalize_tier_default(self):
+        """normalize_tier(None) returns 'low'."""
+        from scripts.config import normalize_tier
+        self.assertEqual(normalize_tier(None), "low")
+
+    def test_normalize_tier_min(self):
+        """normalize_tier('min') returns 'min'."""
+        from scripts.config import normalize_tier
+        self.assertEqual(normalize_tier("min"), "min")
+
+    def test_normalize_tier_low(self):
+        """normalize_tier('low') returns 'low'."""
+        from scripts.config import normalize_tier
+        self.assertEqual(normalize_tier("low"), "low")
+
+    def test_normalize_tier_medium(self):
+        """normalize_tier('medium') returns 'medium'."""
+        from scripts.config import normalize_tier
+        self.assertEqual(normalize_tier("medium"), "medium")
+
+    def test_normalize_tier_invalid_falls_back(self):
+        """normalize_tier('invalid') falls back to 'low'."""
+        from scripts.config import normalize_tier
+        self.assertEqual(normalize_tier("invalid"), "low")
+
+    def test_normalize_tier_empty_string(self):
+        """normalize_tier('') falls back to 'low'."""
+        from scripts.config import normalize_tier
+        self.assertEqual(normalize_tier(""), "low")
+
+    def test_tier_map_has_expected_tiers(self):
+        """TIER_MAP has min, low, medium."""
+        from scripts.config import TIER_MAP
+        self.assertIn("min", TIER_MAP)
+        self.assertIn("low", TIER_MAP)
+        self.assertIn("medium", TIER_MAP)
+
+    def test_tier_map_min_counts(self):
+        """min tier: 1 deepseek + 1 mimo = 2 total calls."""
+        from scripts.config import TIER_MAP
+        counts = TIER_MAP["min"]
+        self.assertEqual(counts.get("deepseek-v4-flash"), 1)
+        self.assertEqual(counts.get("mimo-v2.5"), 1)
+        self.assertEqual(sum(counts.values()), 2)
+
+    def test_tier_map_low_counts(self):
+        """low tier: 2 deepseek + 2 mimo = 4 total calls."""
+        from scripts.config import TIER_MAP
+        counts = TIER_MAP["low"]
+        self.assertEqual(counts.get("deepseek-v4-flash"), 2)
+        self.assertEqual(counts.get("mimo-v2.5"), 2)
+        self.assertEqual(sum(counts.values()), 4)
+
+    def test_tier_map_medium_counts(self):
+        """medium tier: 2 deepseek + 2 mimo + 1 minimax = 5 total calls."""
+        from scripts.config import TIER_MAP
+        counts = TIER_MAP["medium"]
+        self.assertEqual(counts.get("deepseek-v4-flash"), 2)
+        self.assertEqual(counts.get("mimo-v2.5"), 2)
+        self.assertEqual(counts.get("minimax-m3"), 1)
+        self.assertEqual(sum(counts.values()), 5)
+
+
+class TestScenarioConfigWithTier(unittest.TestCase):
+    """Test get_scenario_config with tier parameter."""
+
+    def setUp(self):
+        self.minimal_config = {
+            "version": "2.0.0",
+            "default": {
+                "panel": {
+                    "models": [
+                        {"name": "deepseek-v4-flash", "count": 3, "temp": 0.75, "top_p": 0.9},
+                        {"name": "mimo-v2.5", "count": 3, "temps": [0.6, 0.7, 0.8], "top_p": 0.95},
+                    ],
+                },
+                "judge": {"model": "deepseek-v4-flash", "temp": 0.0, "top_p": 1.0},
+            },
+            "scenarios": {
+                "coding": {
+                    "panel": {"deepseek": {"temp": 0.5, "max_completion_tokens": 2000}},
+                    "judge": {"stages": "single", "reasoning_mode": "max", "max_completion_tokens": 16000},
+                },
+                "general": {
+                    "panel": {"deepseek": {"temp": 0.75, "max_completion_tokens": 800}},
+                    "judge": {"stages": "single", "reasoning_mode": "high", "max_completion_tokens": 8000},
+                },
+            },
+        }
+
+    def _total_panel_count(self, models):
+        """Sum count field across all models."""
+        return sum(m.get("count", 0) for m in models)
+
+    def test_min_tier_total_calls(self):
+        """min tier produces 2 total panel calls."""
+        from scripts.config import get_scenario_config
+        cfg = get_scenario_config(self.minimal_config, "general", tier="min")
+        models = cfg["panel"]["models"]
+        self.assertEqual(self._total_panel_count(models), 2)
+
+    def test_low_tier_total_calls(self):
+        """low tier produces 4 total panel calls."""
+        from scripts.config import get_scenario_config
+        cfg = get_scenario_config(self.minimal_config, "general", tier="low")
+        models = cfg["panel"]["models"]
+        self.assertEqual(self._total_panel_count(models), 4)
+
+    def test_medium_tier_total_calls(self):
+        """medium tier produces 5 total panel calls (2+2+1)."""
+        from scripts.config import get_scenario_config
+        cfg = get_scenario_config(self.minimal_config, "general", tier="medium")
+        models = cfg["panel"]["models"]
+        self.assertEqual(self._total_panel_count(models), 5)
+
+    def test_default_tier_low(self):
+        """No tier argument defaults to low (4 calls)."""
+        from scripts.config import get_scenario_config
+        cfg = get_scenario_config(self.minimal_config, "general")
+        models = cfg["panel"]["models"]
+        self.assertEqual(self._total_panel_count(models), 4)
+
+    def test_min_tier_deepseek_count(self):
+        """min tier has deepseek count=1."""
+        from scripts.config import get_scenario_config
+        cfg = get_scenario_config(self.minimal_config, "general", tier="min")
+        for m in cfg["panel"]["models"]:
+            if m["name"] == "deepseek-v4-flash":
+                self.assertEqual(m["count"], 1)
+                break
+        else:
+            self.fail("deepseek-v4-flash not found in models")
+
+    def test_min_tier_mimo_count(self):
+        """min tier has mimo count=1."""
+        from scripts.config import get_scenario_config
+        cfg = get_scenario_config(self.minimal_config, "general", tier="min")
+        for m in cfg["panel"]["models"]:
+            if m["name"] == "mimo-v2.5":
+                self.assertEqual(m["count"], 1)
+                break
+        else:
+            self.fail("mimo-v2.5 not found in models")
+
+    def test_medium_tier_includes_minimax(self):
+        """medium tier includes minimax-m3 with count=1."""
+        from scripts.config import get_scenario_config
+        cfg = get_scenario_config(self.minimal_config, "general", tier="medium")
+        found = [m for m in cfg["panel"]["models"] if m["name"] == "minimax-m3"]
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0]["count"], 1)
+
+    def test_minimax_not_in_min_or_low(self):
+        """minimax-m3 should NOT appear in min or low tiers."""
+        from scripts.config import get_scenario_config
+        for tier in ("min", "low"):
+            cfg = get_scenario_config(self.minimal_config, "general", tier=tier)
+            names = [m["name"] for m in cfg["panel"]["models"]]
+            self.assertNotIn("minimax-m3", names, f"minimax-m3 should not be in {tier} tier")
+
+    def test_minimax_defaults_sensible(self):
+        """minimax-m3 gets sensible default parameters."""
+        from scripts.config import get_scenario_config
+        cfg = get_scenario_config(self.minimal_config, "general", tier="medium")
+        for m in cfg["panel"]["models"]:
+            if m["name"] == "minimax-m3":
+                self.assertIn("temp", m)
+                self.assertIn("top_p", m)
+                self.assertIn("top_k", m)
+                self.assertIn("max_tokens", m)
+                self.assertIn("thinking", m)
+                break
+        else:
+            self.fail("minimax-m3 not found")
+
+    def test_judge_config_unchanged_by_tier(self):
+        """Judge config is identical regardless of tier."""
+        from scripts.config import get_scenario_config
+        cfg_no_tier = get_scenario_config(self.minimal_config, "coding")
+        for tier in ("min", "low", "medium"):
+            cfg_tier = get_scenario_config(self.minimal_config, "coding", tier=tier)
+            self.assertEqual(cfg_tier["judge"], cfg_no_tier["judge"],
+                             f"Judge config changed for tier={tier}")
+
+    def test_judge_config_unchanged_general(self):
+        """Judge config is identical for general scenario too."""
+        from scripts.config import get_scenario_config
+        cfg_no_tier = get_scenario_config(self.minimal_config, "general")
+        for tier in ("min", "low", "medium"):
+            cfg_tier = get_scenario_config(self.minimal_config, "general", tier=tier)
+            self.assertEqual(cfg_tier["judge"], cfg_no_tier["judge"],
+                             f"Judge config changed for tier={tier}")
+
+
+class TestPanelTier(unittest.TestCase):
+    """Test panel dispatch respects tier configs without making network calls."""
+
+    def test_medium_tier_builds_minimax_spec(self):
+        """panel dispatch should build a spec for minimax-m3 when using medium tier."""
+        from scripts.panel import dispatch_panel
+
+        config = {
+            "default": {
+                "panel": {
+                    "models": [
+                        {"name": "deepseek-v4-flash", "count": 3, "temp": 0.75, "top_p": 0.9,
+                         "max_completion_tokens": 800},
+                        {"name": "mimo-v2.5", "count": 3, "temps": [0.6, 0.7, 0.8], "top_p": 0.95,
+                         "max_tokens": 600, "thinking": {"type": "disabled"}},
+                    ],
+                },
+                "judge": {"model": "deepseek-v4-flash", "temp": 0.0, "top_p": 1.0},
+            },
+            "scenarios": {
+                "general": {
+                    "panel": {"deepseek": {"temp": 0.75, "max_completion_tokens": 800}},
+                    "judge": {"stages": "single", "reasoning_mode": "high", "max_completion_tokens": 8000},
+                },
+            },
+            "api": {
+                "primary": {
+                    "endpoint": "http://127.0.0.1:1/nonexistent",
+                    "timeout": {
+                        "panel_floor": 2,
+                        "judge_floor": 2,
+                        "panel_throughput": 9999,
+                        "judge_throughput": 9999,
+                        "overhead_seconds": 0,
+                        "max_timeout": 300,
+                    },
+                    "retry": {"max_retries": 0, "delays_seconds": [0.1]},
+                },
+            },
+            "pipeline": {
+                "max_panel_workers": 6,
+                "min_survivors": 1,
+                "graceful_degradation": True,
+            },
+        }
+
+        # Mock the API call so we don't make network requests
+        with mock.patch("scripts.panel.call_llm_with_retry") as mock_call:
+            mock_call.return_value = {"success": True, "content": "test",
+                                      "reasoning_content": None, "usage": {},
+                                      "elapsed": 0.01}
+            result = dispatch_panel("test query", "general", config=config, tier="medium",
+                                    max_workers=5)
+
+        self.assertIn("responses", result)
+        labels = [r.get("label", "") for r in result["responses"]]
+        minimax_labels = [l for l in labels if "minimax-m3" in l]
+        self.assertEqual(len(minimax_labels), 1,
+                         f"Expected 1 minimax-m3 label, got {len(minimax_labels)}: {labels}")
+        self.assertIn("minimax-m3 #1", minimax_labels)
+
+    def test_min_tier_only_two_specs(self):
+        """min tier should only produce 2 call specs (1 deepseek, 1 mimo)."""
+        from scripts.panel import dispatch_panel
+
+        config = {
+            "default": {"panel": {"models": []}, "judge": {}},
+            "scenarios": {
+                "general": {
+                    "panel": {
+                        "deepseek": {"temp": 0.75, "max_completion_tokens": 800},
+                        "mimo": {"temps": [0.7], "max_tokens": 600},
+                    },
+                    "judge": {"stages": "single"},
+                },
+            },
+            "api": {
+                "primary": {
+                    "endpoint": "http://127.0.0.1:1/nonexistent",
+                    "timeout": {
+                        "panel_floor": 2,
+                        "judge_floor": 2,
+                        "panel_throughput": 9999,
+                        "judge_throughput": 9999,
+                        "overhead_seconds": 0,
+                        "max_timeout": 300,
+                    },
+                    "retry": {"max_retries": 0, "delays_seconds": [0.1]},
+                },
+            },
+            "pipeline": {"max_panel_workers": 2, "min_survivors": 1, "graceful_degradation": True},
+        }
+
+        with mock.patch("scripts.panel.call_llm_with_retry") as mock_call:
+            mock_call.return_value = {"success": True, "content": "test",
+                                      "reasoning_content": None, "usage": {},
+                                      "elapsed": 0.01}
+            result = dispatch_panel("test", "general", config=config, tier="min", max_workers=2)
+
+        self.assertEqual(len(result["responses"]), 2)
+
+    def test_top_k_passed_in_extra_params(self):
+        """top_k from model config should be passed via extra_params."""
+        from scripts.panel import dispatch_panel
+
+        config = {
+            "default": {
+                "panel": {
+                    "models": [
+                        {"name": "minimax-m3", "count": 1, "temp": 0.85, "top_p": 0.9,
+                         "top_k": 40, "max_tokens": 2048, "thinking": {"type": "adaptive"}},
+                    ],
+                },
+                "judge": {"model": "deepseek-v4-flash", "temp": 0.0, "top_p": 1.0},
+            },
+            "scenarios": {
+                "general": {"panel": {}, "judge": {"stages": "single"}},
+            },
+            "api": {
+                "primary": {
+                    "endpoint": "http://127.0.0.1:1/nonexistent",
+                    "timeout": {
+                        "panel_floor": 2,
+                        "judge_floor": 2,
+                        "panel_throughput": 9999,
+                        "judge_throughput": 9999,
+                        "overhead_seconds": 0,
+                        "max_timeout": 300,
+                    },
+                    "retry": {"max_retries": 0, "delays_seconds": [0.1]},
+                },
+            },
+            "pipeline": {"max_panel_workers": 1, "min_survivors": 1, "graceful_degradation": True},
+        }
+
+        with mock.patch("scripts.panel.call_llm_with_retry") as mock_call:
+            mock_call.return_value = {"success": True, "content": "test",
+                                      "reasoning_content": None, "usage": {},
+                                      "elapsed": 0.01}
+            dispatch_panel("test", "general", config=config, tier="medium", max_workers=1)
+
+        # Check that call_llm_with_retry was called with extra_params containing top_k
+        found_top_k = False
+        for call_args in mock_call.call_args_list:
+            kwargs = call_args[1]
+            extra = kwargs.get("extra_params") or {}
+            if "top_k" in extra:
+                found_top_k = True
+                break
+        self.assertTrue(found_top_k, "No call had top_k in extra_params")
+
+    def test_count_zero_skipped(self):
+        """Model entry with count<=0 should not produce call specs."""
+        from scripts.panel import _build_call_specs
+
+        models_list = [
+            {"name": "deepseek-v4-flash", "count": 0, "temp": 0.75, "top_p": 0.9},
+            {"name": "mimo-v2.5", "count": 2, "temps": [0.6, 0.7], "top_p": 0.95},
+        ]
+        specs = _build_call_specs(models_list, "test query", {})
+        self.assertEqual(len(specs), 2)
+        for spec in specs:
+            self.assertNotEqual(spec["model"], "deepseek-v4-flash")
+
+
+class TestCLITier(unittest.TestCase):
+    """Test CLI --tier argument."""
+
+    def _run(self, *args):
+        """Run scripts.cli.main with args and return (returncode, stdout, stderr)."""
+        from io import StringIO
+        from scripts.cli import main
+        import sys
+
+        old_stdout = sys.stdout
+        old_stderr = sys.stderr
+        sys.stdout = StringIO()
+        sys.stderr = StringIO()
+        try:
+            rc = main(list(args))
+            return rc, sys.stdout.getvalue(), sys.stderr.getvalue()
+        except SystemExit as e:
+            return e.code if e.code is not None else 0, sys.stdout.getvalue(), sys.stderr.getvalue()
+        finally:
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
+
+    def test_dry_run_includes_tier_default(self):
+        """Dry-run JSON includes tier field (default low)."""
+        import json
+        rc, out, _ = self._run("--dry-run", "--query", "test")
+        self.assertEqual(rc, 0)
+        data = json.loads(out)
+        self.assertIn("tier", data)
+
+    def test_dry_run_tier_min(self):
+        """Dry-run with --tier min shows tier=min."""
+        import json
+        rc, out, _ = self._run("--dry-run", "--query", "test", "--tier", "min")
+        self.assertEqual(rc, 0)
+        data = json.loads(out)
+        self.assertEqual(data["tier"], "min")
+
+    def test_dry_run_tier_medium(self):
+        """Dry-run with --tier medium shows tier=medium."""
+        import json
+        rc, out, _ = self._run("--dry-run", "--query", "test", "--tier", "medium")
+        self.assertEqual(rc, 0)
+        data = json.loads(out)
+        self.assertEqual(data["tier"], "medium")
+
+    def test_dry_run_tier_invalid_accepted(self):
+        """Invalid --tier value is accepted at parse time (validation happens in pipeline)."""
+        import json
+        rc, out, _ = self._run("--dry-run", "--query", "test", "--tier", "ultra")
+        self.assertEqual(rc, 0)
+        data = json.loads(out)
+        self.assertEqual(data["tier"], "ultra")
+
+
+class TestPipelineTier(unittest.TestCase):
+    """Test pipeline tier integration."""
+
+    def test_pipeline_accepts_tier(self):
+        """run_pipeline accepts tier parameter and includes it in metadata."""
+        from scripts.pipeline import run_pipeline
+        result = run_pipeline("What is 2+2?", tier="min")
+        self.assertIn("metadata", result)
+        self.assertEqual(result["metadata"].get("tier"), "min")
+
+    def test_pipeline_default_tier(self):
+        """run_pipeline defaults tier to low in metadata."""
+        from scripts.pipeline import run_pipeline
+        result = run_pipeline("What is 2+2?")
+        self.assertIn("metadata", result)
+        self.assertEqual(result["metadata"].get("tier"), "low")
+
+
+if __name__ == "__main__":
+    unittest.main()

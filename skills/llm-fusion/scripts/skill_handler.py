@@ -5,7 +5,7 @@ Never raises exceptions.
 """
 
 
-def handle_fusion_trigger(query, config_path=None, verbose=True):
+def handle_fusion_trigger(query, config_path=None, verbose=True, tier="low"):
     """Handle a fusion pipeline trigger.
 
     Delegates to the pipeline and formats output for chat display.
@@ -18,6 +18,8 @@ def handle_fusion_trigger(query, config_path=None, verbose=True):
         Path to fusion_config.yaml.
     verbose : bool
         Enable verbose logging.
+    tier : str
+        Model tier — ``"min"``, ``"low"``, or ``"medium"`` (default ``"low"``).
 
     Returns
     -------
@@ -29,7 +31,7 @@ def handle_fusion_trigger(query, config_path=None, verbose=True):
         from scripts.pipeline import run_pipeline
         from scripts.output import format_for_chat
 
-        result = run_pipeline(query, config_path=config_path, verbose=verbose)
+        result = run_pipeline(query, config_path=config_path, verbose=verbose, tier=tier)
         return format_for_chat(result, include_metadata=True)
 
     except Exception as exc:
