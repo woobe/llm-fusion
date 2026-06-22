@@ -214,9 +214,41 @@ fusion:
         delays_seconds: [1, 3]
 
   pipeline:
-    default_tier: low
+    default_tier: low2
     max_panel_workers: 6
     min_survivors: 2
     output_dir: ./fusion_output/
-    soft_deadline_seconds: 180
+    soft_deadline_seconds: 90
     graceful_degradation: true
+    express_qa:
+      enabled: true
+      max_chars: 120
+      min_confidence: 0.85
+      model: deepseek-v4-flash
+      temperature: 0.0
+      max_completion_tokens: 1200
+      detection_method: regex
+      exclude_patterns:
+        - "\\bexplain\\b"
+        - "\\bcompare\\b"
+        - "\\bdescribe\\b"
+        - "\\bdifference between\\b"
+        - "\\bhow does\\b"
+        - "\\bwhy does\\b"
+        - "\\bwith examples?\\b"
+    retry:
+      low1:
+        max_retries: 0
+        delays_seconds: []
+      low2:
+        max_retries: 1
+        delays_seconds: [1]
+      low3:
+        max_retries: 1
+        delays_seconds: [1]
+      medium:
+        max_retries: 1
+        delays_seconds: [1]
+      high:
+        max_retries: 2
+        delays_seconds: [1, 3]

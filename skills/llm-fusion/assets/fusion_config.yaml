@@ -214,7 +214,7 @@ fusion:
         delays_seconds: [1, 3]
 
   pipeline:
-    default_tier: low
+    default_tier: low2
     max_panel_workers: 6
     min_survivors: 2
     soft_deadline_seconds: 90
@@ -236,10 +236,13 @@ fusion:
         - "\\bwhy does\\b"
         - "\\bwith examples?\\b"
     retry:
-      min:
+      low1:
         max_retries: 0
         delays_seconds: []
-      low:
+      low2:
+        max_retries: 1
+        delays_seconds: [1]
+      low3:
         max_retries: 1
         delays_seconds: [1]
       medium:

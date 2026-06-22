@@ -17,8 +17,9 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 TIER_MAP = {
-    "min": {"deepseek-v4-flash": 2, "mimo-v2.5": 1},
-    "low": {"deepseek-v4-flash": 2, "mimo-v2.5": 2},
+    "low1": {"deepseek-v4-flash": 1, "mimo-v2.5": 1},
+    "low2": {"deepseek-v4-flash": 2, "mimo-v2.5": 2},
+    "low3": {"deepseek-v4-flash": 3, "mimo-v2.5": 3},
     "medium": {"deepseek-v4-flash": 1, "mimo-v2.5": 1, "deepseek-v4-pro": 1},
     "high": {"deepseek-v4-pro": 1, "minimax-m3": 1, "qwen3.7-plus": 1},
 }
@@ -75,13 +76,13 @@ VALID_TIERS = frozenset(TIER_MAP.keys())
 
 
 def normalize_tier(tier):
-    """Normalize a tier value; defaults to 'low' on None or invalid input.
+    """Normalize a tier value; defaults to 'low2' on None or invalid input.
 
-    Never raises — falls back to ``low`` for any unrecognised value.
+    Never raises — falls back to ``low2`` for any unrecognised value.
     """
     if tier is not None and isinstance(tier, str) and tier in VALID_TIERS:
         return tier
-    return "low"
+    return "low2"
 
 
 def _apply_tier_counts(models, tier):
@@ -91,7 +92,7 @@ def _apply_tier_counts(models, tier):
     with count=0. Unknown custom models keep their original count.
     Never raises.
     """
-    tier_map = TIER_MAP.get(tier, TIER_MAP["low"])
+    tier_map = TIER_MAP.get(tier, TIER_MAP["low2"])
     updated = []
     seen = set()
 
@@ -216,7 +217,7 @@ _MODEL_NAME_MAP = {
 }
 
 
-def resolve_tier_models(panel_cfg, tier="low"):
+def resolve_tier_models(panel_cfg, tier="low2"):
     """Resolve a tier-based model list from panel config.
 
     Supports two formats:
@@ -236,8 +237,8 @@ def resolve_tier_models(panel_cfg, tier="low"):
         The ``default.panel`` section of the fusion config (or a sub-dict
         containing keys ``tiers``, ``model_defaults``, and/or ``models``).
     tier : str
-        One of ``"min"``, ``"low"``, ``"medium"``, or ``"high"``.  Falls back to
-        ``"low"`` when the requested tier is missing from the config.
+        One of ``"low1"``, ``"low2"``, ``"low3"``, ``"medium"``, or ``"high"``.  Falls back to
+        ``"low2"`` when the requested tier is missing from the config.
 
     Returns
     -------
@@ -250,7 +251,7 @@ def resolve_tier_models(panel_cfg, tier="low"):
     # 1. Try new ``tiers`` key
     if "tiers" in panel_cfg:
         tiers = panel_cfg["tiers"]
-        tier_defs = tiers.get(base_tier, tiers.get("low", []))
+        tier_defs = tiers.get(base_tier, tiers.get("low2", []))
 
     if tier_defs is not None:
         # New format: merge with model_defaults
@@ -271,7 +272,7 @@ def resolve_tier_models(panel_cfg, tier="low"):
         return _apply_tier_counts(list(legacy_models), base_tier)
 
     # 3. Nothing at all – return TIER_MAP defaults
-    tier_map = TIER_MAP.get(base_tier, TIER_MAP["low"])
+    tier_map = TIER_MAP.get(base_tier, TIER_MAP["low2"])
     return [_default_model_entry(name, count) for name, count in tier_map.items()]
 
 
@@ -321,7 +322,7 @@ def get_scenario_config(config, scenario_id, tier=None):
     scenario_id : str
         One of the known scenario identifiers.
     tier : str or None
-        Panel tier (``min``, ``low``, ``medium``, or ``None`` for default).
+        Panel tier (``low1``, ``low2``, ``low3``, ``medium``, ``high``, or ``None`` for default).
 
     Returns a flat dict with keys: panel (dict), judge (dict), cleaning (dict),
     conciseness_suffix (str).

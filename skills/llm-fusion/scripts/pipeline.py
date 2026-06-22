@@ -38,7 +38,7 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
     verbose : bool
         Print progress information if True.
     tier : str or None
-        Panel tier (``min``, ``low``, ``medium``, or ``None`` for default).
+        Panel tier (``low1``, ``low2``, ``low3``, ``medium``, ``high``, or ``None`` for default).
 
     Returns
     -------
@@ -184,7 +184,7 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
     if (
         express_cfg.get("enabled", False)
         and scenario_id == "qa"
-        and normalized_tier == "min"
+        and normalized_tier == "low1"
         and len(query) <= express_cfg.get("max_chars", 120)
         and classification.get("confidence", 0.0) >= express_cfg.get("min_confidence", 0.85)
         and classification.get("detection_method") == express_cfg.get("detection_method", "regex")

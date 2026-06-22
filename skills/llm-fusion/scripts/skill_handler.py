@@ -5,7 +5,7 @@ Never raises exceptions.
 """
 
 
-def handle_fusion_trigger(query, config_path=None, verbose=True, tier="low"):
+def handle_fusion_trigger(query, config_path=None, verbose=True, tier="low2"):
     """Handle a fusion pipeline trigger.
 
     Delegates to the pipeline and formats output for chat display.
@@ -19,7 +19,7 @@ def handle_fusion_trigger(query, config_path=None, verbose=True, tier="low"):
     verbose : bool
         Enable verbose logging.
     tier : str
-        Model tier — ``"min"``, ``"low"``, ``"medium"``, or ``"high"`` (default ``"low"``).
+        Model tier — ``"low1"``, ``"low2"``, ``"low3"``, ``"medium"``, or ``"high"`` (default ``"low2"``).
 
     Returns
     -------
@@ -42,8 +42,8 @@ def get_skill_manifest():
     """Return the skill manifest."""
     return {
         "name": "llm-fusion",
-        "version": "0.2.6",
-        "description": "Multi-scenario fusion pipeline with tier-based panel dispatch (min/low/medium/high) using deepseek-v4-flash, mimo-v2.5, minimax-m3, deepseek-v4-pro, and qwen3.7-plus",
+        "version": "0.2.7",
+        "description": "Multi-scenario fusion pipeline with tier-based panel dispatch (low1/low2/low3/medium/high) using deepseek-v4-flash, mimo-v2.5, minimax-m3, deepseek-v4-pro, and qwen3.7-plus",
         "author": "snr-dev",
         "triggers": [
             {
@@ -67,8 +67,8 @@ def get_skill_manifest():
                 },
                 "tier": {
                     "type": "string",
-                    "description": "Panel tier: min, low (default), medium, or high",
-                    "default": "low",
+                    "description": "Panel tier: low1, low2 (default), low3, medium, or high",
+                    "default": "low2",
                 },
             },
         },

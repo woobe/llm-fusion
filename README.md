@@ -17,10 +17,10 @@ token budget, cleaning rules, and judge strategy.
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/woobe/llm-fusion/main/install.sh)"
 ```
 
-Then in chat (tier examples — min, low/default, medium, high):
+Then in chat (tier examples — low1, low2/default, low3, medium, high):
 ```bash
-llm-fusion min What is the capital of Australia?
-llm-fusion low Write a bash one-liner to find the 5 largest files in a directory
+llm-fusion low1 What is the capital of Australia?
+llm-fusion low2 Write a bash one-liner to find the 5 largest files in a directory
 llm-fusion medium Explain the difference between TCP and UDP with examples
 llm-fusion high Compare SQLite and PostgreSQL for a mobile app
 ```
@@ -41,7 +41,7 @@ Combine tier and scenario:
 ```bash
 llm-fusion medium coding: Write a Python function that retries an API call up to 3 times with exponential backoff
 llm-fusion high reasoning: A store sells apples at $2 each and oranges at $3 each. If I buy 5 fruits for $12, how many of each did I buy?
-llm-fusion min qa: Who founded SpaceX?
+llm-fusion low1 qa: Who founded SpaceX?
 llm-fusion high creative: Write a short conversation between a senior and junior developer about code reviews
 ```
 
@@ -50,24 +50,26 @@ Or from the command line (same queries, no Hermes chat needed):
 PYTHONPATH=skills/llm-fusion python3 -m scripts --query "What are the main differences between British and American English?"
 PYTHONPATH=skills/llm-fusion python3 -m scripts --tier medium --query "Write a Python function that retries an API call up to 3 times with exponential backoff"
 PYTHONPATH=skills/llm-fusion python3 -m scripts --tier high --query "Compare SQLite and PostgreSQL for a mobile app"
-PYTHONPATH=skills/llm-fusion python3 -m scripts --tier min --dry-run --query "What is the capital of Australia?"
+PYTHONPATH=skills/llm-fusion python3 -m scripts --tier low1 --dry-run --query "What is the capital of Australia?"
 ```
 
 ---
 
 ## Tiers
 
-The panel uses a tier system to control how many models are called and which models participate. The default tier is **low** (4 calls).
+The panel uses a tier system to control how many models are called and which models participate. The default tier is **low2** (4 calls).
 
 | Tier | Default | Calls | Panel | Judge |
 |----|----|----|----|----|
-| min | | 3 | 2x deepseek-v4-flash + 1x mimo-v2.5 | deepseek-v4-flash |
-| low | (default) | 4 | 2x deepseek-v4-flash + 2x mimo-v2.5 | deepseek-v4-flash |
+| low1 | | 2 | 1x deepseek-v4-flash + 1x mimo-v2.5 | deepseek-v4-flash |
+| low2 | (default) | 4 | 2x deepseek-v4-flash + 2x mimo-v2.5 | deepseek-v4-flash |
+| low3 | | 6 | 3x deepseek-v4-flash + 3x mimo-v2.5 | deepseek-v4-flash |
 | medium | | 3 | 1x deepseek-v4-flash + 1x mimo-v2.5 + 1x deepseek-v4-pro | deepseek-v4-flash |
 | high | | 3 | 1x deepseek-v4-pro + 1x minimax-m3 + 1x qwen3.7-plus | deepseek-v4-flash |
 
-- **min** — Fastest, lowest cost. Best for simple factual queries.
-- **low** — Balanced speed and diversity. Good default for most use cases.
+- **low1** — Fastest, lowest cost (2 calls). Best for simple factual queries.
+- **low2** — Balanced speed and diversity. Good default for most use cases.
+- **low3** — Higher capacity (6 calls). Best for comprehensive exploration.
 - **medium** — Adds deepseek-v4-pro for deeper reasoning. Good for coding, analysis.
 - **high** — Premium panel with 3 different models. Best for complex reasoning, creative work, and important queries where quality matters most.
 
@@ -87,13 +89,15 @@ user query
     v
 +-----------------------------+
 |  2. Panel (tier-based)      |  ThreadPoolExecutor
-|     +> min   — 2 deepseek   |  number of calls depends on tier:
-|       + 1 mimo (3 total)    |     min    = 3 calls
-|     +> low   — 2 deepseek   |     low    = 4 calls (default)
-|       + 2 mimo (4 total)    |     medium = 3 calls (deepseek +
-|     +> medium — 1 deepseek  |       mimo + deepseek-v4-pro)
-|       + 1 mimo + 1 deepseek-v4-pro |     high  = 3 calls (deepseek-v4-pro
-|       (3 total)             |       + minimax-m3 + qwen3.7-plus)
+|     +> low1  — 1 deepseek   |  number of calls depends on tier:
+|       + 1 mimo (2 total)    |     low1   = 2 calls
+|     +> low2  — 2 deepseek   |     low2   = 4 calls (default)
+|       + 2 mimo (4 total)    |     low3   = 6 calls
+|     +> low3  — 3 deepseek   |     medium = 3 calls (deepseek +
+|       + 3 mimo (6 total)    |       mimo + deepseek-v4-pro)
+|     +> medium — 1 deepseek  |     high  = 3 calls (deepseek-v4-pro
+|       + 1 mimo + 1 deepseek-v4-pro |       + minimax-m3 + qwen3.7-plus)
+|       (3 total)             |
 |     +> high — 1 deepseek-v4-pro |
 |       + 1 minimax + 1 qwen  |
 |       (3 total)             |
@@ -120,7 +124,16 @@ user query
 
 ## Changelog
 
-### v0.2.6 (current)
+### v0.2.7 (current)
+- **Restructured tiers** — removed `min` and `low`, replaced with `low1` (1+1), `low2` (2+2), and `low3` (3+3)
+- **New tier lineup:** low1 / low2 / low3 / medium / high (5 tiers)
+- **Express path** now gated on `low1` instead of `min`
+- **Default tier** changed from `low` to `low2`
+- **Tier-aware retry** config updated for new tier names
+- Fixed outdated default tier values in skill_handler.py and example config
+- Version bumped to 0.2.7
+
+### v0.2.6
 - **Fixed express QA misclassification** — now gated on regex-only `qa` detection, preventing LLM-classified explanatory questions from bypassing panel+judge
 - **Added explanatory keyword exclusion patterns** — `explain`, `compare`, `describe`, `difference between`, `how does`, `why does`, `with example` block express path for non-factual queries
 - **Raised express token budget** 600→1200 for safety headroom
@@ -129,29 +142,30 @@ user query
 
 ### v0.2.5
 - **Express direct path** for simple factual QA — short-circuits panel+judge when classifier detects short QA at high confidence, cutting pipeline time to a single direct LLM call
-- **Reduced general judge reasoning** from `high` to `low` for min/low tiers — directly attacks the 47-53s general scenario judge bottleneck
+- **Reduced general judge reasoning** from `high` to `low` for low1/low2 tiers — directly attacks the 47-53s general scenario judge bottleneck
 - **Lowered default judge token budgets** — default 8000→4000, coding 16000→8000 (no test case exceeded 3679 completion tokens)
 - **Tighter timeouts matching real data** — panel 30→40s, judge 60→65s, max_timeout 300→90s, soft deadline 180→90s
 - **Judge input truncation** — configurable max_panel_response_chars per scenario (qa=1200, general=1800)
-- **Tier-aware retry policy** — min tier uses 0 retries, low/medium use 1 retry, high uses 2 retries
-- All changes grounded in real latency test data (12-case benchmark across min/low tiers)
+- **Tier-aware retry policy** — low1 tier uses 0 retries, low2/low3/medium use 1 retry, high uses 2 retries
+- All changes grounded in real latency test data (12-case benchmark across low1/low2 tiers)
 - Version bumped to 0.2.5
 
 ### v0.2.4
 - **DeepSeek V4 Pro** — validated and integrated into new tier structure
-  - New `min`: 2 deepseek-v4-flash + 1 mimo-v2.5 (3 calls)
+  - New `low1`: 1 deepseek-v4-flash + 1 mimo-v2.5 (2 calls)
+  - New `low2`: 2 deepseek-v4-flash + 2 mimo-v2.5 (4 calls)
   - New `medium`: 1 deepseek-v4-flash + 1 mimo-v2.5 + 1 deepseek-v4-pro (3 calls)
   - New `high`: 1 deepseek-v4-pro + 1 minimax-m3 + 1 qwen3.7-plus (3 calls)
   - deepseek-v4-pro settings: temp=0.9, top_p=0.95, reasoning_mode=high, max_completion_tokens=2048
   - reasoning_mode now supported in panel extra_params and triggers 1.5x timeout multiplier
 - CLI now supports `--tier high`
-- 4 tiers: min (3), low (4), medium (3), high (3) — all with judge config unchanged
+- 5 tiers: low1 (2), low2 (4), low3 (6), medium (3), high (3) — all with judge config unchanged
 - Version bumped to 0.2.4
 
 ### v0.2.3
 - **Qwen3.7 Plus** — validated and integrated into `medium` panel tier
   - New `medium`: 1 deepseek + 1 minimax-m3 + 1 qwen3.7-plus (3 calls)
-  - Removed Mimo from `medium`; `min` and `low` still use Mimo
+  - Removed Mimo from `medium`; `low1`, `low2`, and `low3` still use Mimo
   - Qwen settings: temp=0.8, top_p=0.92, top_k=20, reasoning_effort=high
   - Uses max_tokens (not max_completion_tokens) and returns reasoning_content separately
 - **MiniMax M3** — added as panel-only model in `medium` tier
@@ -165,7 +179,7 @@ user query
   - Scales automatically when models are added or token budgets change
 - Judge config unchanged by tier (all tiers use same judge config)
 - Worker count adjusts dynamically to panel size
-- CLI now supports `--tier min|low|medium`
+- CLI now supports `--tier min|low|medium` → CLI now supports `--tier low1|low2|low3|medium|high`
 - **Bug fixes:** API key HERMES_HOME fallback, output saved on all paths, panel responses in JSON, graceful variable scoping fix, output dir consistency
 
 ### v0.2
@@ -228,8 +242,8 @@ review, reasoning) or a structured intermediate analysis improves the output
 
 | Role | Model | temp | top_p | Extra | Token Param |
 |---|---|---|---|---|---|
-| Panel (min, low, medium) | deepseek-v4-flash | 0.75 | 0.9 | — | max_completion_tokens |
-| Panel (min, low, medium) | mimo-v2.5 | 0.6/0.7/0.8 | 0.95 | thinking.type=disabled | max_tokens |
+| Panel (low1, low2, low3, medium) | deepseek-v4-flash | 0.75 | 0.9 | — | max_completion_tokens |
+| Panel (low1, low2, low3, medium) | mimo-v2.5 | 0.6/0.7/0.8 | 0.95 | thinking.type=disabled | max_tokens |
 | Panel (medium, high) | deepseek-v4-pro | 0.9 | 0.95 | reasoning_mode=high | max_completion_tokens |
 | Panel (high only) | minimax-m3 | 0.85 | 0.9 | top_k=40, thinking.type=adaptive | max_tokens |
 | Panel (high only) | qwen3.7-plus | 0.8 | 0.92 | top_k=20, reasoning_effort=high | max_tokens |
@@ -303,15 +317,15 @@ llm-fusion/
 ### Run from command line
 
 ```bash
-# Run with default (low) tier
+# Run with default (low2) tier
 PYTHONPATH=skills/llm-fusion python3 -m scripts --query "What is 2+2?" --verbose
 
-# Choose a different tier (min / low / medium / high)
+# Choose a different tier (low1 / low2 / low3 / medium / high)
 PYTHONPATH=skills/llm-fusion python3 -m scripts --query "What is 2+2?" --tier medium --verbose
 PYTHONPATH=skills/llm-fusion python3 -m scripts --query "What is 2+2?" --tier high --verbose
 
 # Dry-run to validate config and arguments
-PYTHONPATH=skills/llm-fusion python3 -m scripts --dry-run --query "test" --tier min
+PYTHONPATH=skills/llm-fusion python3 -m scripts --dry-run --query "test" --tier low1
 ```
 
 ### Run tests
