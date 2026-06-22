@@ -6,7 +6,6 @@ Uses stdlib's concurrent.futures.ThreadPoolExecutor for parallelism.
 Never raises exceptions.
 """
 
-import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -22,7 +21,7 @@ def _derive_timeout(model_entry, timeout_cfg):
     """Derive a per-model timeout from token budget using the config formula.
 
     Formula: timeout = max(floor, token_budget / throughput + overhead)
-    - If model has thinking.type=adaptive or enabled, multiply by 1.5x
+    - If model has thinking.type=adaptive/enabled or reasoning_effort set, multiply by 1.5x
     - If model has an explicit ``timeout`` field, use that directly
     - Falls back to ``timeout_cfg.panel_floor`` if no token budget found
 
@@ -30,7 +29,7 @@ def _derive_timeout(model_entry, timeout_cfg):
     ----------
     model_entry : dict
         The model config entry (may contain max_tokens, max_completion_tokens,
-        thinking, and an optional ``timeout`` field).
+        thinking, reasoning_effort, and an optional ``timeout`` field).
     timeout_cfg : dict
         Timeout configuration with keys: panel_floor, panel_throughput,
         overhead_seconds, max_timeout.
@@ -63,11 +62,14 @@ def _derive_timeout(model_entry, timeout_cfg):
         raw_timeout = floor
 
     # Apply thinking multiplier if model uses adaptive/enabled thinking
+    uses_thinking = False
     thinking = model_entry.get("thinking")
     if thinking and isinstance(thinking, dict):
         thinking_type = thinking.get("type", "")
-        if thinking_type in ("adaptive", "enabled"):
-            raw_timeout *= 1.5
+        uses_thinking = thinking_type in ("adaptive", "enabled")
+
+    if uses_thinking or model_entry.get("reasoning_effort"):
+        raw_timeout *= 1.5
 
     timeout = max(floor, int(raw_timeout))
     return min(timeout, max_timeout)
@@ -107,6 +109,7 @@ def _build_call_specs(models_list, user_prompt, config):
         max_tokens = model_entry.get("max_tokens")
         max_completion = model_entry.get("max_completion_tokens")
         thinking = model_entry.get("thinking")
+        reasoning_effort = model_entry.get("reasoning_effort")
         top_k = model_entry.get("top_k")
 
         # Derive per-model adaptive timeout
@@ -133,6 +136,8 @@ def _build_call_specs(models_list, user_prompt, config):
             extra = {}
             if thinking:
                 extra["thinking"] = thinking
+            if reasoning_effort:
+                extra["reasoning_effort"] = reasoning_effort
             if top_k is not None:
                 extra["top_k"] = top_k
             if extra:

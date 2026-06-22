@@ -99,13 +99,14 @@ class TestTierConfig(unittest.TestCase):
         self.assertEqual(sum(counts.values()), 4)
 
     def test_tier_map_medium_counts(self):
-        """medium tier: 2 deepseek + 2 mimo + 1 minimax = 5 total calls."""
+        """medium tier: 1 deepseek + 1 minimax + 1 qwen = 3 total calls."""
         from scripts.config import TIER_MAP
         counts = TIER_MAP["medium"]
-        self.assertEqual(counts.get("deepseek-v4-flash"), 2)
-        self.assertEqual(counts.get("mimo-v2.5"), 2)
+        self.assertEqual(counts.get("deepseek-v4-flash"), 1)
+        self.assertNotIn("mimo-v2.5", counts)
         self.assertEqual(counts.get("minimax-m3"), 1)
-        self.assertEqual(sum(counts.values()), 5)
+        self.assertEqual(counts.get("qwen3.7-plus"), 1)
+        self.assertEqual(sum(counts.values()), 3)
 
 
 class TestScenarioConfigWithTier(unittest.TestCase):
@@ -154,11 +155,11 @@ class TestScenarioConfigWithTier(unittest.TestCase):
         self.assertEqual(self._total_panel_count(models), 4)
 
     def test_medium_tier_total_calls(self):
-        """medium tier produces 5 total panel calls (2+2+1)."""
+        """medium tier produces 3 total panel calls (1+1+1)."""
         from scripts.config import get_scenario_config
         cfg = get_scenario_config(self.minimal_config, "general", tier="medium")
         models = cfg["panel"]["models"]
-        self.assertEqual(self._total_panel_count(models), 5)
+        self.assertEqual(self._total_panel_count(models), 3)
 
     def test_default_tier_low(self):
         """No tier argument defaults to low (4 calls)."""
@@ -189,13 +190,17 @@ class TestScenarioConfigWithTier(unittest.TestCase):
         else:
             self.fail("mimo-v2.5 not found in models")
 
-    def test_medium_tier_includes_minimax(self):
-        """medium tier includes minimax-m3 with count=1."""
+    def test_medium_tier_includes_qwen_and_no_mimo(self):
+        """medium tier includes qwen3.7-plus and disables mimo-v2.5."""
         from scripts.config import get_scenario_config
         cfg = get_scenario_config(self.minimal_config, "general", tier="medium")
-        found = [m for m in cfg["panel"]["models"] if m["name"] == "minimax-m3"]
-        self.assertEqual(len(found), 1)
-        self.assertEqual(found[0]["count"], 1)
+        models = cfg["panel"]["models"]
+        names = [m["name"] for m in models]
+        self.assertIn("qwen3.7-plus", names)
+        self.assertIn("minimax-m3", names)
+        for m in models:
+            if m["name"] == "mimo-v2.5":
+                self.assertEqual(m.get("count"), 0)
 
     def test_minimax_not_in_min_or_low(self):
         """minimax-m3 should NOT appear in min or low tiers."""
@@ -220,6 +225,22 @@ class TestScenarioConfigWithTier(unittest.TestCase):
         else:
             self.fail("minimax-m3 not found")
 
+    def test_qwen_defaults_sensible(self):
+        """qwen3.7-plus gets validated default parameters."""
+        from scripts.config import get_scenario_config
+        cfg = get_scenario_config(self.minimal_config, "general", tier="medium")
+        for m in cfg["panel"]["models"]:
+            if m["name"] == "qwen3.7-plus":
+                self.assertEqual(m["temp"], 0.8)
+                self.assertEqual(m["top_p"], 0.92)
+                self.assertEqual(m["top_k"], 20)
+                self.assertEqual(m["reasoning_effort"], "high")
+                self.assertEqual(m["max_tokens"], 2048)
+                self.assertNotIn("max_completion_tokens", m)
+                break
+        else:
+            self.fail("qwen3.7-plus not found")
+
     def test_judge_config_unchanged_by_tier(self):
         """Judge config is identical regardless of tier."""
         from scripts.config import get_scenario_config
@@ -242,8 +263,8 @@ class TestScenarioConfigWithTier(unittest.TestCase):
 class TestPanelTier(unittest.TestCase):
     """Test panel dispatch respects tier configs without making network calls."""
 
-    def test_medium_tier_builds_minimax_spec(self):
-        """panel dispatch should build a spec for minimax-m3 when using medium tier."""
+    def test_medium_tier_builds_expected_three_specs(self):
+        """medium tier builds deepseek, minimax, and qwen specs only."""
         from scripts.panel import dispatch_panel
 
         config = {
@@ -291,14 +312,14 @@ class TestPanelTier(unittest.TestCase):
                                       "reasoning_content": None, "usage": {},
                                       "elapsed": 0.01}
             result = dispatch_panel("test query", "general", config=config, tier="medium",
-                                    max_workers=5)
+                                    max_workers=3)
 
-        self.assertIn("responses", result)
         labels = [r.get("label", "") for r in result["responses"]]
-        minimax_labels = [l for l in labels if "minimax-m3" in l]
-        self.assertEqual(len(minimax_labels), 1,
-                         f"Expected 1 minimax-m3 label, got {len(minimax_labels)}: {labels}")
-        self.assertIn("minimax-m3 #1", minimax_labels)
+        self.assertEqual(len(labels), 3)
+        self.assertIn("deepseek-v4-flash #1", labels)
+        self.assertIn("minimax-m3 #1", labels)
+        self.assertIn("qwen3.7-plus #1", labels)
+        self.assertFalse(any("mimo-v2.5" in label for label in labels), labels)
 
     def test_min_tier_only_two_specs(self):
         """min tier should only produce 2 call specs (1 deepseek, 1 mimo)."""
@@ -389,6 +410,35 @@ class TestPanelTier(unittest.TestCase):
                 found_top_k = True
                 break
         self.assertTrue(found_top_k, "No call had top_k in extra_params")
+
+    def test_qwen_reasoning_effort_passed_in_extra_params(self):
+        """qwen reasoning_effort and top_k should pass through extra_params."""
+        from scripts.panel import _build_call_specs
+
+        models_list = [
+            {"name": "qwen3.7-plus", "count": 1, "temp": 0.8, "top_p": 0.92,
+             "top_k": 20, "reasoning_effort": "high", "max_tokens": 2048},
+        ]
+        specs = _build_call_specs(models_list, "test query", {})
+        self.assertEqual(len(specs), 1)
+        spec = specs[0]
+        self.assertEqual(spec["model"], "qwen3.7-plus")
+        self.assertEqual(spec["max_tokens"], 2048)
+        self.assertIsNone(spec["max_completion_tokens"])
+        self.assertEqual(spec["extra_params"]["top_k"], 20)
+        self.assertEqual(spec["extra_params"]["reasoning_effort"], "high")
+
+    def test_reasoning_effort_applies_timeout_multiplier(self):
+        """reasoning_effort should apply the same 1.5x timeout multiplier as thinking."""
+        from scripts.panel import _derive_timeout
+        timeout_cfg = {
+            "panel_floor": 2,
+            "panel_throughput": 100,
+            "overhead_seconds": 0,
+            "max_timeout": 300,
+        }
+        model_entry = {"max_tokens": 1000, "reasoning_effort": "high"}
+        self.assertEqual(_derive_timeout(model_entry, timeout_cfg), 15)
 
     def test_count_zero_skipped(self):
         """Model entry with count<=0 should not produce call specs."""

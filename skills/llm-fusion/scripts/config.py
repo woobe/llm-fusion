@@ -19,7 +19,7 @@ except ImportError:
 TIER_MAP = {
     "min": {"deepseek-v4-flash": 1, "mimo-v2.5": 1},
     "low": {"deepseek-v4-flash": 2, "mimo-v2.5": 2},
-    "medium": {"deepseek-v4-flash": 2, "mimo-v2.5": 2, "minimax-m3": 1},
+    "medium": {"deepseek-v4-flash": 1, "minimax-m3": 1, "qwen3.7-plus": 1},
 }
 
 MINIMAX_DEFAULTS = {
@@ -31,6 +31,34 @@ MINIMAX_DEFAULTS = {
     "max_tokens": 2048,
     "thinking": {"type": "adaptive"},
 }
+
+QWEN_DEFAULTS = {
+    "name": "qwen3.7-plus",
+    "count": 0,
+    "temp": 0.8,
+    "top_p": 0.92,
+    "top_k": 20,
+    "reasoning_effort": "high",
+    "max_tokens": 2048,
+}
+
+TIER_MODEL_DEFAULTS = {
+    "minimax-m3": MINIMAX_DEFAULTS,
+    "qwen3.7-plus": QWEN_DEFAULTS,
+}
+
+TIER_CONTROLLED_MODELS = frozenset(
+    name for tier_counts in TIER_MAP.values() for name in tier_counts
+) | frozenset(TIER_MODEL_DEFAULTS)
+
+
+def _default_model_entry(name, count):
+    defaults = TIER_MODEL_DEFAULTS.get(name)
+    if defaults is not None:
+        entry = dict(defaults)
+        entry["count"] = count
+        return entry
+    return {"name": name, "count": count}
 
 VALID_TIERS = frozenset(TIER_MAP.keys())
 
@@ -48,126 +76,28 @@ def normalize_tier(tier):
 def _apply_tier_counts(models, tier):
     """Apply *tier* model counts to an existing models list.
 
-    For each model entry in the tier map the function updates the ``count``
-    field of the matching model entry already in the list.  If a model from
-    the tier map is not present (e.g. minimax-m3), a new entry with sensible
-    defaults is appended.
-
-    Models that are not covered by the tier map keep their original count.
+    Known tier-controlled models absent from the selected tier are disabled
+    with count=0. Unknown custom models keep their original count.
     Never raises.
     """
     tier_map = TIER_MAP.get(tier, TIER_MAP["low"])
     updated = []
-
     seen = set()
+
     for entry in models:
         name = entry.get("name", "")
         if name in tier_map:
             entry["count"] = tier_map[name]
             seen.add(name)
+        elif name in TIER_CONTROLLED_MODELS:
+            entry["count"] = 0
         updated.append(entry)
 
-    # Add models from the tier map that were not in the original list
     for name, count in tier_map.items():
         if name not in seen:
-            if name == "minimax-m3":
-                entry = dict(MINIMAX_DEFAULTS)
-                entry["count"] = count
-            else:
-                entry = {"name": name, "count": count}
-            updated.append(entry)
+            updated.append(_default_model_entry(name, count))
 
     return updated
-
-
-def resolve_tier_models(panel_cfg, tier="low"):
-    """Resolve a tier-based model list from *panel_cfg*.
-
-    If *panel_cfg* contains a ``tiers`` key, the function builds the model
-    list from the tier definition (model name + count) merged with
-    ``model_defaults`` from the config.
-
-    If the ``tiers`` key is absent the function falls back to the legacy
-    ``models`` list (if present), then applies the hardcoded ``TIER_MAP``
-    counts on top so that the tier argument still changes call volumes.
-
-    Parameters
-    ----------
-    panel_cfg : dict
-        The ``default.panel`` section of the fusion config.
-    tier : str
-        One of ``"min"``, ``"low"``, or ``"medium"``. Unknown tiers fall
-        back to ``"low"``.
-
-    Returns
-    -------
-    list[dict]
-        Model entries with full parameters merged. Never returns None.
-    """
-    tier = normalize_tier(tier)
-    config_tiers = panel_cfg.get("tiers")
-    model_defaults = panel_cfg.get("model_defaults", {})
-
-    if config_tiers is not None:
-        # Use config-specified tiers
-        tier_defs = config_tiers.get(tier, config_tiers.get("low", []))
-        models = []
-        for entry in tier_defs:
-            name = entry["name"]
-            count = entry.get("count", 1)
-            defaults = model_defaults.get(name, {})
-            model_entry = {"name": name, "count": count}
-            model_entry.update(defaults)
-            models.append(model_entry)
-        return models
-
-    # No config tiers — use legacy models list (if any) + TIER_MAP override
-    legacy = panel_cfg.get("models", [])
-    return _apply_tier_counts(legacy, tier)
-
-
-# Map of scenario panel keys -> full model names
-_MODEL_NAME_MAP = {
-    "deepseek": "deepseek-v4-flash",
-    "mimo": "mimo-v2.5",
-    "minimax": "minimax-m3",
-}
-
-
-def _apply_scenario_overrides(models, scenario_panel):
-    """Apply scenario-specific parameter overrides on a resolved model list.
-
-    Iterates over the resolved *models* list and overrides parameters from
-    *scenario_panel* entries (keyed by short names such as ``deepseek`` or
-    ``mimo``). Preserves ``count`` and ``name``. Mutates entries in place.
-
-    Parameters
-    ----------
-    models : list[dict]
-        Resolved model entries (from ``resolve_tier_models`` or legacy).
-    scenario_panel : dict
-        The ``panel`` sub-dict from a scenario config (may be empty).
-
-    Returns
-    -------
-    list[dict]
-        The same list, updated in place.
-    """
-    if not scenario_panel or not models:
-        return models
-
-    for alias, full_name in _MODEL_NAME_MAP.items():
-        if alias not in scenario_panel:
-            continue
-        overrides = scenario_panel[alias]
-        for m in models:
-            if m.get("name") == full_name:
-                for k, v in overrides.items():
-                    if k not in ("name", "count"):
-                        m[k] = v
-                break
-    return models
-
 
 def _discover_config_path():
     """Walk the portable config discovery order and return first path found.
@@ -270,6 +200,7 @@ _MODEL_NAME_MAP = {
     "deepseek": "deepseek-v4-flash",
     "mimo": "mimo-v2.5",
     "minimax": "minimax-m3",
+    "qwen": "qwen3.7-plus",
 }
 
 
@@ -329,7 +260,7 @@ def resolve_tier_models(panel_cfg, tier="low"):
 
     # 3. Nothing at all – return TIER_MAP defaults
     tier_map = TIER_MAP.get(base_tier, TIER_MAP["low"])
-    return [{"name": name, "count": count} for name, count in tier_map.items()]
+    return [_default_model_entry(name, count) for name, count in tier_map.items()]
 
 
 def _apply_scenario_overrides(models, scenario_panel):

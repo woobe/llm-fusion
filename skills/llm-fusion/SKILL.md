@@ -1,6 +1,6 @@
 ---
 name: llm-fusion
-description: Multi-scenario fusion pipeline that dispatches 6 parallel LLM calls (3x deepseek-v4-flash + 3x mimo-v2.5) and synthesizes a superior answer via a single or two-stage judge with chain-of-thought reasoning.
+description: Multi-scenario fusion pipeline with tier-based panel dispatch (min/low/medium) using deepseek-v4-flash, minimax-m3, mimo-v2.5, and qwen3.7-plus — synthesizes a superior answer via a single or two-stage judge with chain-of-thought reasoning.
 license: MIT
 compatibility:
   - hermes-agent>=1.0.0
@@ -22,7 +22,7 @@ metadata:
 
 # llm-fusion
 
-Multi-model fusion skill for Hermes Agent. Dispatches 6 parallel LLM calls, cleans and deduplicates responses, then synthesizes a single superior answer using a judge model with chain-of-thought reasoning.
+Multi-model fusion skill for Hermes Agent. Dispatches parallel LLM calls across configurable tiers (min/low/medium) with deepseek-v4-flash, minimax-m3, mimo-v2.5, and qwen3.7-plus, then cleans, deduplicates, and synthesizes a single superior answer using a judge model with chain-of-thought reasoning.
 
 ## Quick Start
 
@@ -33,8 +33,10 @@ Multi-model fusion skill for Hermes Agent. Dispatches 6 parallel LLM calls, clea
 
 ## Usage
 
-`/llm-fusion <prompt>` - auto-detects scenario
+`/llm-fusion <prompt>` - auto-detects scenario, defaults to low tier
 `/llm-fusion coding: <prompt>` - force coding scenario
+`/llm-fusion --tier medium <prompt>` - use medium tier (includes minimax-m3 + qwen3.7-plus)
+`/llm-fusion --tier min <prompt>` - use min tier (minimal panel calls)
 
 ## Scenarios
 

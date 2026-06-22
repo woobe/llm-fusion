@@ -792,6 +792,10 @@ class TestTierResolution(unittest.TestCase):
                             "temp": 0.85, "top_p": 0.9, "top_k": 40,
                             "max_tokens": 800, "thinking": {"type": "adaptive"},
                         },
+                        "qwen3.7-plus": {
+                            "temp": 0.8, "top_p": 0.92, "top_k": 20,
+                            "reasoning_effort": "high", "max_tokens": 2048,
+                        },
                     },
                     "tiers": {
                         "min": [
@@ -803,9 +807,9 @@ class TestTierResolution(unittest.TestCase):
                             {"name": "mimo-v2.5", "count": 2},
                         ],
                         "medium": [
-                            {"name": "deepseek-v4-flash", "count": 2},
-                            {"name": "mimo-v2.5", "count": 2},
+                            {"name": "deepseek-v4-flash", "count": 1},
                             {"name": "minimax-m3", "count": 1},
+                            {"name": "qwen3.7-plus", "count": 1},
                         ],
                     },
                 },
@@ -893,20 +897,20 @@ class TestTierResolution(unittest.TestCase):
         self.assertEqual(models[1]["count"], 2)
 
     def test_resolve_medium_tier(self):
-        """medium tier returns 3 entries (2 deepseek + 2 mimo + 1 minimax)."""
+        """medium tier returns 3 entries (1 deepseek + 1 minimax + 1 qwen)."""
         from scripts.config import resolve_tier_models
         panel_cfg = self.tiered_config["default"]["panel"]
         models = resolve_tier_models(panel_cfg, "medium")
         self.assertEqual(len(models), 3)
         names = [m["name"] for m in models]
-        self.assertEqual(names, ["deepseek-v4-flash", "mimo-v2.5", "minimax-m3"])
-        self.assertEqual(models[0]["count"], 2)
-        self.assertEqual(models[1]["count"], 2)
-        self.assertEqual(models[2]["count"], 1)
-        # Minimax defaults
-        self.assertEqual(models[2]["temp"], 0.85)
-        self.assertEqual(models[2]["top_k"], 40)
-        self.assertEqual(models[2]["thinking"]["type"], "adaptive")
+        self.assertEqual(names, ["deepseek-v4-flash", "minimax-m3", "qwen3.7-plus"])
+        self.assertEqual([m["count"] for m in models], [1, 1, 1])
+        self.assertEqual(models[1]["top_k"], 40)
+        self.assertEqual(models[1]["thinking"]["type"], "adaptive")
+        self.assertEqual(models[2]["temp"], 0.8)
+        self.assertEqual(models[2]["top_k"], 20)
+        self.assertEqual(models[2]["reasoning_effort"], "high")
+        self.assertEqual(models[2]["max_tokens"], 2048)
 
     def test_resolve_unknown_tier_falls_back_to_low(self):
         """Unknown tier name falls back to 'low'."""
@@ -973,13 +977,13 @@ class TestTierResolution(unittest.TestCase):
         self.assertEqual(models[1]["count"], 2)
 
     def test_get_scenario_config_medium_tier(self):
-        """Medium tier yields 3 model entries with minimax."""
+        """Medium tier yields deepseek, minimax, and qwen model entries."""
         from scripts.config import get_scenario_config
         cfg = get_scenario_config(self.tiered_config, "general", tier="medium")
         models = cfg["panel"]["models"]
-        self.assertEqual(len(models), 3)
-        self.assertEqual(models[2]["name"], "minimax-m3")
-        self.assertEqual(models[2]["count"], 1)
+        names = [m["name"] for m in models]
+        self.assertEqual(names, ["deepseek-v4-flash", "minimax-m3", "qwen3.7-plus"])
+        self.assertEqual(sum(m["count"] for m in models), 3)
 
 
 if __name__ == "__main__":

@@ -30,6 +30,13 @@ fusion:
           max_tokens: 2048
           thinking:
             type: adaptive
+        - name: qwen3.7-plus
+          count: 0
+          temp: 0.8
+          top_p: 0.92
+          top_k: 20
+          reasoning_effort: high
+          max_tokens: 2048
     judge:
       model: deepseek-v4-flash
       temp: 0.0

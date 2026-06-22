@@ -46,10 +46,10 @@ user query
 |     +> min   — 1 deepseek   |  number of calls depends on tier:
 |       + 1 mimo (2 total)    |     min    = 2 calls
 |     +> low   — 2 deepseek   |     low    = 4 calls (default)
-|       + 2 mimo (4 total)    |     medium = 5 calls
-|     +> medium — 2 deepseek  |  (deepseek-v4-flash + mimo-v2.5 +
-|       + 2 mimo + 1 minimax  |   minimax-m3 in medium only)
-|       (5 total)             |
+|       + 2 mimo (4 total)    |     medium = 3 calls
+|     +> medium — 1 deepseek  |  (deepseek-v4-flash +
+|       + 1 minimax + 1 qwen  |   minimax-m3 + qwen3.7-plus)
+|       (3 total)             |
 +-----------------------------+
     |
     v
@@ -73,11 +73,12 @@ user query
 
 ## Changelog
 
-### v0.2.2 (current)
-- **Panel tier system** — `--tier min|low|medium` controls panel size
-  - `min`: 1 deepseek + 1 mimo (2 calls)
-  - `low`: 2 deepseek + 2 mimo (4 calls, default)
-  - `medium`: 2 deepseek + 2 mimo + 1 minimax-m3 (5 calls)
+### v0.2.3 (current)
+- **Qwen3.7 Plus** — validated and integrated into `medium` panel tier
+  - New `medium`: 1 deepseek + 1 minimax-m3 + 1 qwen3.7-plus (3 calls)
+  - Removed Mimo from `medium`; `min` and `low` still use Mimo
+  - Qwen settings: temp=0.8, top_p=0.92, top_k=20, reasoning_effort=high
+  - Uses max_tokens (not max_completion_tokens) and returns reasoning_content separately
 - **MiniMax M3** — added as panel-only model in `medium` tier
   - Settings: temp=0.85, top_p=0.9, top_k=40, thinking.type=adaptive
   - Uses max_tokens (not max_completion_tokens)
@@ -155,6 +156,7 @@ review, reasoning) or a structured intermediate analysis improves the output
 | Panel (all tiers) | deepseek-v4-flash | 0.75 | 0.9 | — | max_completion_tokens |
 | Panel (all tiers) | mimo-v2.5 | 0.6/0.7/0.8 | 0.95 | thinking.type=disabled | max_tokens |
 | Panel (medium only) | minimax-m3 | 0.85 | 0.9 | top_k=40, thinking.type=adaptive | max_tokens |
+| Panel (medium only) | qwen3.7-plus | 0.8 | 0.92 | top_k=20, reasoning_effort=high | max_tokens |
 | Judge (all tiers) | deepseek-v4-flash | 0.0 | 1.0 | reasoning_mode=high | max_completion_tokens |
 
 - **deepseek-v4-flash** — primary model for panel and judge. Fast, supports
@@ -163,6 +165,9 @@ review, reasoning) or a structured intermediate analysis improves the output
   cost. Panel-only role (never makes synthesis decisions).
 - **minimax-m3** — panel-only model, active only in `medium` tier. Provides
   additional diversity with adaptive thinking at temp=0.85.
+- **qwen3.7-plus** — panel-only model, active only in `medium` tier. Provides a
+  high-reasoning response with separate `reasoning_content` and validated direct
+  top-level params.
 
 ### opencode.go Focus
 
@@ -179,8 +184,8 @@ derives timeouts dynamically:
 - **Formula**: `timeout = max(floor, token_budget / throughput + overhead)`
   where throughput and overhead are configurable per provider.
 - **Thinking multiplier**: Models with `thinking.type=adaptive` or
-  `thinking.type=enabled` get a 1.5x multiplier because thinking/CoT
-  responses take significantly longer per token.
+  `thinking.type=enabled` or `reasoning_effort` set get a 1.5x multiplier
+  because thinking/CoT responses take significantly longer per token.
 - **Explicit override**: Any model entry can set a literal `timeout`
   field which bypasses the formula entirely.
 - **Pipeline soft deadline**: An overall deadline (default 180s) guards
