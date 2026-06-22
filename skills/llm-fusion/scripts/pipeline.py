@@ -179,13 +179,37 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
     scenario_cfg = get_scenario_config(config, scenario_id, tier=normalized_tier)
 
     # --- Step 3: Dispatch panel ---
+
+    def _panel_progress(event):
+        """Render panel progress events to stderr."""
+        phase = event.get("phase")
+        if phase == "panel_started":
+            print(
+                f"[llm-fusion] Panel progress: 0/{event['total']} complete "
+                f"({event.get('max_workers', '?')} workers)",
+                file=sys.stderr, flush=True,
+            )
+        elif phase == "panel_call_completed":
+            status = "ok" if event["success"] else "FAILED"
+            elapsed = event.get("elapsed", 0)
+            if event["success"]:
+                extra = f", {elapsed:.0f}ms"
+            else:
+                extra = f", error: {event.get('error', '?')}"
+            print(
+                f"[llm-fusion] Panel progress: {event['completed']}/{event['total']} complete "
+                f"({event['label']} {status}{extra})",
+                file=sys.stderr, flush=True,
+            )
+
     t0 = time.monotonic()
     # Count expected parallel calls from scenario models
     panel_models = scenario_cfg.get("panel", {}).get("models", [])
     expected_calls = sum(m.get("count", 0) for m in panel_models)
     if verbose:
         print(f"[pipeline] Dispatching panel ({expected_calls} parallel calls, tier={normalized_tier})...")
-    panel_result = dispatch_panel(query, scenario_id, config=config, tier=normalized_tier)
+    panel_result = dispatch_panel(query, scenario_id, config=config, tier=normalized_tier,
+                                  progress_callback=_panel_progress if verbose else None)
     t_panel = time.monotonic() - t0
 
     deadline_check = _check_deadline("panel")
