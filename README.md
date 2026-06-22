@@ -17,23 +17,40 @@ token budget, cleaning rules, and judge strategy.
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/woobe/llm-fusion/main/install.sh)"
 ```
 
-Then in chat:
+Then in chat (tier examples — min, low/default, medium, high):
 ```bash
-/llm-fusion What is the capital of France?
-/llm-fusion coding: Write a Python function to sort a list
-/llm-fusion --tier medium Explain the benefits of functional programming
-/llm-fusion --tier high Compare Rust and Go for systems programming
-/llm-fusion --tier min What time is it in Tokyo?
+llm-fusion min Explain recursion in one sentence
+llm-fusion low Compare REST and GraphQL API design trade-offs
+llm-fusion medium Write a Python function to merge overlapping intervals
+llm-fusion high Analyse microservices vs monolith trade-offs for a startup
 ```
 
 Scenarios are auto-detected. To force a specific scenario:
 ```bash
-/llm-fusion bugfix: This function throws a KeyError...
-/llm-fusion reasoning: If all A are B and some B are C...
-/llm-fusion creative: Write a short story about a robot painter
-/llm-fusion qa: What is the population of Japan?
-/llm-fusion plan_review: Review this project roadmap...
-/llm-fusion document: Summarize this API spec...
+llm-fusion coding: Write a Python script that watches a directory and uploads new files to S3
+llm-fusion bugfix: My pytest fixture resets state between tests — here's my conftest.py...
+llm-fusion qa: What are the downsides of using Redis as a primary database?
+llm-fusion plan_review: Review this migration plan from PostgreSQL to CockroachDB...
+llm-fusion creative: Write a short story where a git merge conflict gains sentience
+llm-fusion reasoning: If a bat and a ball cost $1.10 and the bat costs $1 more than the ball, how much does the ball cost?
+llm-fusion document: Take this raw API response and format it as clean markdown docs
+llm-fusion general: Explain the CAP theorem with real-world database examples
+```
+
+Combine tier and scenario:
+```bash
+llm-fusion medium coding: Build a Python rate-limited HTTP client with retries
+llm-fusion high reasoning: Design a data pipeline for real-time Twitter sentiment analysis
+llm-fusion min qa: Is MongoDB suitable as the primary store for an e-commerce product catalog?
+llm-fusion high creative: Write a dialogue between a senior and junior dev about when to refactor
+```
+
+Or from the command line (same queries, no Hermes chat needed):
+```bash
+PYTHONPATH=skills/llm-fusion python3 -m scripts --query "Compare REST and GraphQL API trade-offs"
+PYTHONPATH=skills/llm-fusion python3 -m scripts --tier medium --query "Write a Python function to merge overlapping intervals"
+PYTHONPATH=skills/llm-fusion python3 -m scripts --tier high --query "Analyse microservices vs monolith trade-offs for a startup"
+PYTHONPATH=skills/llm-fusion python3 -m scripts --tier min --dry-run --query "Explain recursion"
 ```
 
 ---
@@ -42,12 +59,12 @@ Scenarios are auto-detected. To force a specific scenario:
 
 The panel uses a tier system to control how many models are called and which models participate. The default tier is **low** (4 calls).
 
-| Tier | Default | Calls | Models |
-|---|---|---|---|
-| min | | 3 | 2x deepseek-v4-flash + 1x mimo-v2.5 |
-| low | (default) | 4 | 2x deepseek-v4-flash + 2x mimo-v2.5 |
-| medium | | 3 | 1x deepseek-v4-flash + 1x mimo-v2.5 + 1x deepseek-v4-pro |
-| high | | 3 | 1x deepseek-v4-pro + 1x minimax-m3 + 1x qwen3.7-plus |
+| Tier | Default | Calls | Panel | Judge |
+|---|---|---|---|---|---|
+| min | | 3 | 2x deepseek-v4-flash + 1x mimo-v2.5 | deepseek-v4-flash |
+| low | (default) | 4 | 2x deepseek-v4-flash + 2x mimo-v2.5 | deepseek-v4-flash |
+| medium | | 3 | 1x deepseek-v4-flash + 1x mimo-v2.5 + 1x deepseek-v4-pro | deepseek-v4-flash |
+| high | | 3 | 1x deepseek-v4-pro + 1x minimax-m3 + 1x qwen3.7-plus | deepseek-v4-flash |
 
 - **min** — Fastest, lowest cost. Best for simple factual queries.
 - **low** — Balanced speed and diversity. Good default for most use cases.

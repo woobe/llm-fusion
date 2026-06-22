@@ -19,7 +19,7 @@ def handle_fusion_trigger(query, config_path=None, verbose=True, tier="low"):
     verbose : bool
         Enable verbose logging.
     tier : str
-        Model tier — ``"min"``, ``"low"``, or ``"medium"`` (default ``"low"``).
+        Model tier — ``"min"``, ``"low"``, ``"medium"``, or ``"high"`` (default ``"low"``).
 
     Returns
     -------
@@ -42,8 +42,8 @@ def get_skill_manifest():
     """Return the skill manifest."""
     return {
         "name": "llm-fusion",
-        "version": "0.1.0",
-        "description": "Multi-scenario fusion pipeline that dispatches 6 parallel LLM calls and synthesizes the best answer",
+        "version": "0.2.4",
+        "description": "Multi-scenario fusion pipeline with tier-based panel dispatch (min/low/medium/high) using deepseek-v4-flash, mimo-v2.5, minimax-m3, deepseek-v4-pro, and qwen3.7-plus",
         "author": "snr-dev",
         "triggers": [
             {
@@ -64,6 +64,11 @@ def get_skill_manifest():
                     "type": "boolean",
                     "description": "Enable verbose logging",
                     "default": False,
+                },
+                "tier": {
+                    "type": "string",
+                    "description": "Panel tier: min, low (default), medium, or high",
+                    "default": "low",
                 },
             },
         },
