@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -e
 
+export GIT_TERMINAL_PROMPT=0        # Git: never prompt, fail cleanly if auth needed
+export GIT_ASKPASS=/usr/bin/echo    # Git: silent credential return instead of prompt
+export PIP_NO_INPUT=1               # Pip: non-interactive, no prompts
+
 echo "==> Checking Python..."
 if ! command -v python3 &>/dev/null; then
     echo "ERROR: python3 not found. Please install Python 3.10+." >&2

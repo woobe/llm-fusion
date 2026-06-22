@@ -11,6 +11,7 @@ Coordinates the full fusion pipeline:
 Never raises exceptions.
 """
 
+import os
 import sys
 import time
 
@@ -96,17 +97,28 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
     soft_deadline = pipeline_cfg.get("soft_deadline_seconds", 0)
     graceful = pipeline_cfg.get("graceful_degradation", True)
 
-    # Resolve output directory
-    resolved_output_dir = output_dir
-    if resolved_output_dir is None and config:
-        resolved_output_dir = config.get("pipeline", {}).get("output_dir", None)
+    # Resolve output directory once. If the process is running from an
+    # installed skill directory, skip saving entirely to avoid cluttering
+    # ~/.hermes/skills/llm-fusion or similar skill install paths.
+    cwd = os.getcwd()
+    cwd_for_guard = cwd.replace(os.sep, "/")
+    if "/skills/" in cwd_for_guard:
+        resolved_output_dir = None
+    elif output_dir is not None:
+        resolved_output_dir = output_dir
+    else:
+        config_output_dir = None
+        if config:
+            config_output_dir = config.get("pipeline", {}).get("output_dir")
+        resolved_output_dir = config_output_dir or os.path.join(cwd, "fusion_output")
 
     def _save(r):
         if resolved_output_dir:
-            try:
-                save_output(r, output_dir=resolved_output_dir)
-            except Exception:
-                pass
+            saved_path = save_output(r, output_dir=resolved_output_dir)
+            if saved_path:
+                r["saved_path"] = saved_path
+                if verbose:
+                    print(f"[pipeline] Output saved to: {saved_path}")
         return r
 
     def _check_deadline(phase):
@@ -381,14 +393,6 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
         "total": int(total_elapsed * 1000),
     }
     result["elapsed"] = total_elapsed
-
-    # --- Step 6: Save output ---
-    if output_dir is None and config:
-        output_dir = config.get("pipeline", {}).get("output_dir", None)
-    if output_dir:
-        saved_path = save_output(result, output_dir=output_dir)
-        if verbose:
-            print(f"[pipeline] Output saved to: {saved_path}")
 
     return _save(result)
 

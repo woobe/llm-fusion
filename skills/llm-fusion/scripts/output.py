@@ -92,6 +92,10 @@ def format_for_chat(pipeline_result, include_metadata=True):
         if lines:
             output_parts.append("\n" + "\n".join(lines))
 
+    saved_path = pipeline_result.get("saved_path")
+    if saved_path:
+        output_parts.append(f"Fusion results saved to {saved_path}")
+
     return "\n".join(output_parts)
 
 
