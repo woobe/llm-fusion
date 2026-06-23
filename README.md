@@ -10,7 +10,19 @@ token budget, cleaning rules, and judge strategy.
 
 ---
 
-## Example
+## Quick Start
+
+```bash
+# Install with one-liner
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/woobe/llm-fusion/main/install.sh)"
+```
+
+Then in chat (see following examples).
+
+---
+
+
+## Example (Explain Something to a 5-yo)
 
 ```bash
 llm-fusion low3 Explain Numerai's stake-weighted meta-model to a 5-yo in 5 lines
@@ -39,20 +51,109 @@ llm-fusion low3 Explain Numerai's stake-weighted meta-model to a 5-yo in 5 lines
 
 ---
 
-## Quick Start
+## Example (Short Factual Question)
 
-```bash
-# Install with one-liner
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/woobe/llm-fusion/main/install.sh)"
-```
 
-Then in chat (tier examples — low1, low2/default, low3, medium, high):
 ```bash
 llm-fusion low1 What is the capital of Australia?
-llm-fusion low2 Write a bash one-liner to find the 5 largest files in a directory
-llm-fusion medium Explain the difference between TCP and UDP with examples
-llm-fusion high Compare SQLite and PostgreSQL for a mobile app
 ```
+
+**Final answer**:
+
+Canberra.
+
+The pipeline classified this as a short factual question (qa, 0.85 confidence), so it short-circuited the panel+judge stage and answered directly.
+
+Scenario: qa | Panel: 0/0 (short-circuited) | 2643ms total
+
+---
+
+## Example (Bash)
+
+
+```bash
+llm-fusion low2 Write a bash one-liner to find the 5 largest files in a directory
+```
+
+**Final answer**:
+
+4 panel calls (2 deepseek-v4-flash + 2 mimo-v2.5), all succeeded.
+
+```bash
+find "${1:-.}" -type f -printf '%s\t%p\0' 2>/dev/null | sort -z -t$'\t' -k1 -nr | head -z -n5 | cut -z -f2 | tr '\0' '\n'
+```
+
+How it works:
+- find prints size + path, null-delimited (handles spaces/special chars)
+- sort -z sorts numerically descending by size
+- head -z -n5 keeps the top 5
+- cut -z -f2 strips sizes, leaving only paths
+- tr '\0' '\n' converts nulls to newlines for human reading
+
+Pass a target directory as the first arg, or defaults to .
+
+Panel: 4/4 ok in 24s | Judge: 45s | Total: 73s
+
+
+---
+
+## Example (General QA)
+
+```bash
+llm-fusion low2 Explain the difference between TCP and UDP with examples
+```
+
+**Final answer**:
+
+Classified as general (fallback, 0.6 confidence). All 4 panel calls succeeded, judge synthesized.
+
+TCP — connection-oriented, reliable, ordered. Guarantees delivery via handshake, retransmission, flow control.
+- Examples: HTTP/HTTPS, email (SMTP), FTP, SSH
+
+UDP — connectionless, fire-and-forget. No handshake, no retransmission, no ordering. Fast and low-latency.
+- Examples: live video streaming, online gaming, VoIP, DNS lookups
+
+Key tradeoff: TCP is reliable but slower; UDP is fast but lossy. Pick based on whether you need data integrity (TCP) or speed with tolerable loss (UDP).
+
+Panel: 4/4 ok in 4.4s | Judge: 7.8s | Total: 73s
+
+
+---
+
+## Example (Reasoning)
+
+```bash
+llm-fusion low2 Compare SQLite and PostgreSQL for a mobile app
+```
+
+**Final answer**:
+
+Classified as reasoning (0.9, LLM method) — used the two-stage judge for deeper synthesis. All 4 panel calls succeeded.
+
+Key takeaway: They're complementary, not competitors, in mobile context.
+
+SQLite (on-device)
+- Embedded, serverless, file-based — runs in-process
+- Tiny footprint (~300-600KB), negligible battery impact
+- Single-writer, sufficient for single-user mobile
+- Native support on iOS (Core Data) and Android (Room)
+- Zero config, no network needed, perfect offline
+
+PostgreSQL (server-side)
+- Client-server — requires a separate daemon, impractical on-device
+- Multi-writer MVCC, row-level locking, enterprise concurrency
+- Advanced features: replication, RLS, full-text search, JSONB
+- Scales to thousands of concurrent mobile clients via API layer
+
+Typical architecture: SQLite on device for offline-first local storage + PostgreSQL on server as authoritative backend, with a sync layer between them.
+
+Panel: 4/4 ok in 55s | Judge (two-stage): 87s | Total: 150s
+
+
+
+---
+
+# More Examples
 
 Scenarios are auto-detected. To force a specific scenario:
 ```bash
@@ -350,7 +451,7 @@ llm-fusion/
   README.md, LICENSE, .gitignore
   skills/llm-fusion/    # skill bundle
     SKILL.md, scripts/ (12 modules), assets/ (config)
-  tests/                # 143 unit tests
+  tests/                # 169 unit tests
   local/                # dev notes
 ```
 
