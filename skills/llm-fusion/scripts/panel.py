@@ -166,7 +166,7 @@ def dispatch_panel(query, scenario_id, config=None, max_workers=None, tier=None,
         ``min(len(call_specs), config.pipeline.max_panel_workers)``
         with a minimum of 1.
     tier : str or None
-        Panel tier (``low1``, ``low2``, ``low3``, ``medium``, ``high``, or ``None`` for default).
+        Panel tier (``low1``, ``low2``, ``low3``, ``medium`` (default), ``high``, or ``None`` for default).
     progress_callback : callable or None
         Optional callback invoked with structured event dicts:
         ``panel_started`` (total, max_workers) and

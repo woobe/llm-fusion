@@ -38,7 +38,7 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
     verbose : bool
         Print progress information if True.
     tier : str or None
-        Panel tier (``low1``, ``low2``, ``low3``, ``medium``, ``high``, or ``None`` for default).
+        Panel tier (``low1``, ``low2``, ``low3``, ``medium`` (default), ``high``, or ``None`` for default).
 
     Returns
     -------

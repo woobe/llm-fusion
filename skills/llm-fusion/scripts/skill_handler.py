@@ -5,7 +5,7 @@ Never raises exceptions.
 """
 
 
-def handle_fusion_trigger(query, config_path=None, verbose=True, tier="low2"):
+def handle_fusion_trigger(query, config_path=None, verbose=True, tier="medium"):
     """Handle a fusion pipeline trigger.
 
     Delegates to the pipeline and formats output for chat display.
@@ -19,7 +19,7 @@ def handle_fusion_trigger(query, config_path=None, verbose=True, tier="low2"):
     verbose : bool
         Enable verbose logging.
     tier : str
-        Model tier — ``"low1"``, ``"low2"``, ``"low3"``, ``"medium"``, or ``"high"`` (default ``"low2"``).
+        Model tier — ``"low1"``, ``"low2"``, ``"low3"``, ``"medium"``, or ``"high"`` (default ``"medium"``).
 
     Returns
     -------
@@ -67,8 +67,8 @@ def get_skill_manifest():
                 },
                 "tier": {
                     "type": "string",
-                    "description": "Panel tier: low1, low2 (default), low3, medium, or high",
-                    "default": "low2",
+                    "description": "Panel tier: low1, low2, low3, medium (default), or high",
+                    "default": "medium",
                 },
             },
         },

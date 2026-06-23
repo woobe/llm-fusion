@@ -76,13 +76,13 @@ VALID_TIERS = frozenset(TIER_MAP.keys())
 
 
 def normalize_tier(tier):
-    """Normalize a tier value; defaults to 'low2' on None or invalid input.
+    """Normalize a tier value; defaults to 'medium' on None or invalid input.
 
-    Never raises — falls back to ``low2`` for any unrecognised value.
+    Never raises — falls back to ``medium`` for any unrecognised value.
     """
     if tier is not None and isinstance(tier, str) and tier in VALID_TIERS:
         return tier
-    return "low2"
+    return "medium"
 
 
 def _apply_tier_counts(models, tier):
@@ -217,7 +217,7 @@ _MODEL_NAME_MAP = {
 }
 
 
-def resolve_tier_models(panel_cfg, tier="low2"):
+def resolve_tier_models(panel_cfg, tier="medium"):
     """Resolve a tier-based model list from panel config.
 
     Supports two formats:
@@ -238,7 +238,7 @@ def resolve_tier_models(panel_cfg, tier="low2"):
         containing keys ``tiers``, ``model_defaults``, and/or ``models``).
     tier : str
         One of ``"low1"``, ``"low2"``, ``"low3"``, ``"medium"``, or ``"high"``.  Falls back to
-        ``"low2"`` when the requested tier is missing from the config.
+        ``"medium"`` when the requested tier is missing from the config.
 
     Returns
     -------
@@ -322,7 +322,7 @@ def get_scenario_config(config, scenario_id, tier=None):
     scenario_id : str
         One of the known scenario identifiers.
     tier : str or None
-        Panel tier (``low1``, ``low2``, ``low3``, ``medium``, ``high``, or ``None`` for default).
+        Panel tier (``low1``, ``low2``, ``low3``, ``medium`` (default), ``high``, or ``None`` for default).
 
     Returns a flat dict with keys: panel (dict), judge (dict), cleaning (dict),
     conciseness_suffix (str).

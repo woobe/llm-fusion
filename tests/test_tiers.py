@@ -46,9 +46,9 @@ class TestTierConfig(unittest.TestCase):
         }
 
     def test_normalize_tier_default(self):
-        """normalize_tier(None) returns 'low2'."""
+        """normalize_tier(None) returns 'medium'."""
         from scripts.config import normalize_tier
-        self.assertEqual(normalize_tier(None), "low2")
+        self.assertEqual(normalize_tier(None), "medium")
 
     def test_normalize_tier_low1(self):
         """normalize_tier('low1') returns 'low1'."""
@@ -66,14 +66,14 @@ class TestTierConfig(unittest.TestCase):
         self.assertEqual(normalize_tier("medium"), "medium")
 
     def test_normalize_tier_invalid_falls_back(self):
-        """normalize_tier('invalid') falls back to 'low2'."""
+        """normalize_tier('invalid') falls back to 'medium'."""
         from scripts.config import normalize_tier
-        self.assertEqual(normalize_tier("invalid"), "low2")
+        self.assertEqual(normalize_tier("invalid"), "medium")
 
     def test_normalize_tier_empty_string(self):
-        """normalize_tier('') falls back to 'low2'."""
+        """normalize_tier('') falls back to 'medium'."""
         from scripts.config import normalize_tier
-        self.assertEqual(normalize_tier(""), "low2")
+        self.assertEqual(normalize_tier(""), "medium")
 
     def test_tier_map_has_expected_tiers(self):
         """TIER_MAP has low1, low2, low3, medium, high."""
@@ -183,12 +183,12 @@ class TestScenarioConfigWithTier(unittest.TestCase):
         models = cfg["panel"]["models"]
         self.assertEqual(self._total_panel_count(models), 3)
 
-    def test_default_tier_low2(self):
-        """No tier argument defaults to low2 (4 calls)."""
+    def test_default_tier_medium(self):
+        """No tier argument defaults to medium (3 calls)."""
         from scripts.config import get_scenario_config
         cfg = get_scenario_config(self.minimal_config, "general")
         models = cfg["panel"]["models"]
-        self.assertEqual(self._total_panel_count(models), 4)
+        self.assertEqual(self._total_panel_count(models), 3)
 
     def test_low1_tier_deepseek_count(self):
         """low1 tier has deepseek count=1."""
@@ -532,7 +532,7 @@ class TestCLITier(unittest.TestCase):
             sys.stderr = old_stderr
 
     def test_dry_run_includes_tier_default(self):
-        """Dry-run JSON includes tier field (default low2)."""
+        """Dry-run JSON includes tier field (default medium)."""
         import json
         rc, out, _ = self._run("--dry-run", "--query", "test")
         self.assertEqual(rc, 0)
@@ -583,11 +583,11 @@ class TestPipelineTier(unittest.TestCase):
         self.assertEqual(result["metadata"].get("tier"), "low1")
 
     def test_pipeline_default_tier(self):
-        """run_pipeline defaults tier to low2 in metadata."""
+        """run_pipeline defaults tier to medium in metadata."""
         from scripts.pipeline import run_pipeline
         result = run_pipeline("What is 2+2?")
         self.assertIn("metadata", result)
-        self.assertEqual(result["metadata"].get("tier"), "low2")
+        self.assertEqual(result["metadata"].get("tier"), "medium")
 
 
 if __name__ == "__main__":

@@ -210,7 +210,7 @@ fusion:
         delays_seconds: [1, 3]
 
   pipeline:
-    default_tier: low2
+    default_tier: medium
     max_panel_workers: 6
     min_survivors: 2
     output_dir: ./fusion_output/

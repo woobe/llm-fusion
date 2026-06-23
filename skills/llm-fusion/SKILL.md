@@ -33,7 +33,7 @@ Multi-model fusion skill for Hermes Agent. Dispatches parallel LLM calls across 
 
 ## Usage
 
-`/llm-fusion <prompt>` - auto-detects scenario, defaults to low2 tier
+`/llm-fusion <prompt>` - auto-detects scenario, defaults to medium tier
 `/llm-fusion --tier low1 <prompt>` - use low1 tier (1 deepseek + 1 mimo)
 `/llm-fusion --tier low2 <prompt>` - use low2 tier (2 deepseek + 2 mimo)
 `/llm-fusion --tier low3 <prompt>` - use low3 tier (3 deepseek + 3 mimo)

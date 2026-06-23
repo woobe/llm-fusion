@@ -1397,14 +1397,15 @@ class TestTierResolution(unittest.TestCase):
         self.assertEqual(models[2]["top_k"], 20)
         self.assertEqual(models[2]["reasoning_effort"], "high")
 
-    def test_resolve_unknown_tier_falls_back_to_low(self):
-        """Unknown tier name falls back to 'low2'."""
+    def test_resolve_unknown_tier_falls_back_to_default(self):
+        """Unknown tier name falls back to default tier (medium)."""
         from scripts.config import resolve_tier_models
         panel_cfg = self.tiered_config["default"]["panel"]
         models = resolve_tier_models(panel_cfg, "nonexistent")
-        self.assertEqual(len(models), 2)
-        self.assertEqual(models[0]["count"], 2)
-        self.assertEqual(models[1]["count"], 2)
+        self.assertEqual(len(models), 3)
+        self.assertEqual([m["count"] for m in models], [1, 1, 1])
+        names = [m["name"] for m in models]
+        self.assertEqual(names, ["deepseek-v4-flash", "minimax-m3", "qwen3.7-plus"])
 
     def test_resolve_legacy_models_fallback(self):
         """No tiers key → TIER_MAP overrides counts on legacy models list."""

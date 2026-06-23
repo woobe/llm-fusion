@@ -10,9 +10,9 @@ token budget, cleaning rules, and judge strategy.
 
 **5 tiers (effort)**
 - **low1**: 1 x deepseek-v4-flash + 1 x mimo-v2.5
-- **low2**: 2 x deepseek-v4-flash + 2 x mimo-v2.5 (default tier)
+- **low2**: 2 x deepseek-v4-flash + 2 x mimo-v2.5
 - **low3**: 3 x deepseek-v4-flash + 3 x mimo-v2.5
-- **medium**: 1 x deepseek-v4-flash + 1 x mimo-v2.5 + 1 x deepseek-v4-pro
+- **medium**: 1 x deepseek-v4-flash + 1 x mimo-v2.5 + 1 x deepseek-v4-pro (default tier)
 - **high**: 1 x deepseek-v4-pro + 1 x minimax-m3 + 1 x qwen3.7-plus
 
 ---
@@ -37,47 +37,44 @@ llm-fusion: Explain Numerai's stake-weighted meta-model to a 5-yo in 5 lines
 
 **Panel responses**:
 
-- deepseek-v4-flash #1 (1184 tokens, 720 reasoning tokens)
-  - Imagine many kids guess how many jellybeans are in a jar.
-  - The teacher wants the best guess, so she mixes all guesses together.
-  - But some kids put a token (stake) on their guess to show they are really sure.
-  - The teacher listens more to those kids because they put something on the line.
-  - That's how Numerai picks the best prediction – it listens more to people who put tokens down.
+- deepseek-v4-flash (416 tokens, 358 reasoning)                                                                                                                    
+                                                                                                                                                                      
+  > Numerai is a game where people guess how stocks will move. 
+  > The meta-model combines everyone's guesses into one smart guess. 
+  > But people who have more stake (like points or tokens) get more say in that combined guess. 
+  > This rewards good guesses and helps the whole team win.                                             
+                                                                                                                                                                      
+- mimo-v2.5 (110 tokens, 22 reasoning)                                                                                                                             
+                                                                                                                                                                      
+  > Numerai is a game where lots of people try to guess how the stock market will move. 
+  > Each person puts their own money on their guesses to show they're really confident. 
+  > A smart computer then listens to everyone's guesses but trusts the people who put more money more. 
+  > It mixes all those guesses together into one super-smart prediction, like picking the best parts of every kid's crayon drawing to make one awesome picture.                                          
 
-- deepseek-v4-flash #2 (2456 tokens, 2036 reasoning tokens)
-  - Imagine you and your friends are guessing how many candies are in a big jar.
-  - Each friend has special coins that show how much they want their guess to matter.
-  - When we make one group guess from all your guesses, we mix them together.
-  - But if a friend has more coins, their guess is used more in the mix.
-  - So, friends who put more coins get more say in the group guess.
 
-- mimo-v2.5 #1 (563 tokens, 181 reasoning)
-  - Imagine a hundred kids are each guessing how many jellybeans are in a jar, and the ones who say "I'll put my cookies on the table to bet I'm right" get a louder voice in the final answer.
-  - The louder kids' guesses are added up more, while quiet kids who didn't bet much barely count.
-  - This big, combined final guess -- using everyone's voice but weighted by how brave their cookie bet was -- is called the meta-model.
-  - Kids who guess wrong lose their cookies, so they only bet big when they're really sure, which makes the final answer much better!
-  - And that's how Numerai picks the best stock market guess by listening hardest to the people brave enough to risk their own treasure.
+- deepseek-v4-pro (577 tokens, 494 reasoning)                                                                                                                      
+                                                                                                                                                                      
+  > Think of Numerai as a big guessing game where lots of people try to predict the future. 
+  > Each player bets their own special coins on how sure they are about their guess.
+  > The final guess is a blend of everyone's guesses, but guesses with more coins bet count more. 
+  > This way, players are careful because they can lose their coins if they're wrong, and win more if they're right.
 
-- mimo-v2.5 #2 (1158 tokens, 428 reasoning)
-  - Thousands of people build computer programs to predict the stock market. Numerai combines everyone's predictions into one super-prediction called the "meta-model."
-  - Each participant can stake (bet) their own special tokens (NMR) on their prediction -- like putting allowance money on the table next to their answer.
-  - The more tokens a person stakes, the more influence their prediction has in the final meta-model.
-  - Person A stakes 1 token = small influence. Person B stakes 100 tokens = large influence.
-  - If someone is willing to bet a lot of their own money, they likely genuinely believe their model is good -- they have "skin in the game."
 
-**Final answer**:
+**Judge synthesis**:
 
-Judge synthesis combined all responses into the 5-line candies-in-a-jar version with the explicit "bet your own candy → lose it if wrong → only bet when sure → final guess super accurate" causal chain.
+Judge synthesis (mimo-v2.5, single-stage, 333 tokens, 210 reasoning) blended all responses into the final answer with the special coins + best parts of every picture analogy — drawing from deepseek-v4-pro's "special coins" and mimo-v2.5's "crayon drawing" theme.
 
-  - Imagine many kids guess how many candies are in a jar.
-  - The teacher mixes all the guesses to make one big final guess.
-  - But some kids bet their own candies on their guess to show they're extra sure.
-  - The teacher listens more to kids who bet a lot, because if they're wrong they lose their candy.
-  - So kids only bet big when they're right, making the final guess super accurate.
+**Final Answer**:
 
+  > Numerai is like a big stock-picking game where lots of people guess how the market will move.
+  > Each player bets their own special coins to show how sure they are about their guess.
+  > The game's smart computer makes a final guess by listening to everyone — but gives more importance to guesses from people who bet more coins.
+  > This helps everyone try to guess carefully, because good guesses can win you more coins, and bad ones lose them.
+  > By mixing all the guesses this way, the final prediction becomes extra smart — like taking the best parts of every picture to make one great drawing.            
+                                                                                                                                                                      
 **Stats**:
 
-Scenario: reasoning | Tier: low2 (default) | Panel: 4/4 ok in 30s | Judge: two-stage in 80s | Total: 144s
+Panel: 3/3 ok in 14s | Judge: single-stage in 14s | Total: 42s      
 
 
 ---
@@ -202,20 +199,20 @@ PYTHONPATH=skills/llm-fusion python3 -m scripts --tier low1 --dry-run --query "W
 
 ## Tiers
 
-The panel uses a tier system to control how many models are called and which models participate. The default tier is **low2** (4 calls).
+The panel uses a tier system to control how many models are called and which models participate. The default tier is **medium** (3 calls).
 
 | Tier | Default | Calls | Panel | Judge |
 |----|----|----|----|----|
 | low1 | | 2 | 1x deepseek-v4-flash + 1x mimo-v2.5 | mimo-v2.5 |
-| low2 | (default) | 4 | 2x deepseek-v4-flash + 2x mimo-v2.5 | mimo-v2.5 |
+| low2 | | 4 | 2x deepseek-v4-flash + 2x mimo-v2.5 | mimo-v2.5 |
 | low3 | | 6 | 3x deepseek-v4-flash + 3x mimo-v2.5 | mimo-v2.5 |
-| medium | | 3 | 1x deepseek-v4-flash + 1x mimo-v2.5 + 1x deepseek-v4-pro | mimo-v2.5 |
+| medium | (default) | 3 | 1x deepseek-v4-flash + 1x mimo-v2.5 + 1x deepseek-v4-pro | mimo-v2.5 |
 | high | | 3 | 1x deepseek-v4-pro + 1x minimax-m3 + 1x qwen3.7-plus | mimo-v2.5 |
 
 - **low1** — Fastest, lowest cost (2 calls). Best for simple factual queries.
-- **low2** — Balanced speed and diversity. Good default for most use cases.
+- **low2** — Balanced speed and diversity. Good for general use.
 - **low3** — Higher capacity (6 calls). Best for comprehensive exploration.
-- **medium** — Adds deepseek-v4-pro for deeper reasoning. Good for coding, analysis.
+- **medium** — Adds deepseek-v4-pro for deeper reasoning. Good for coding, analysis. (default)
 - **high** — Premium panel with 3 different models. Best for complex reasoning, creative work, and important queries where quality matters most.
 
 ---
@@ -236,9 +233,9 @@ user query
 |  2. Panel (tier-based)      |  ThreadPoolExecutor
 |     +> low1  — 1 deepseek   |  number of calls depends on tier:
 |       + 1 mimo (2 total)    |     low1   = 2 calls
-|     +> low2  — 2 deepseek   |     low2   = 4 calls (default)
+|     +> low2  — 2 deepseek   |     low2   = 4 calls
 |       + 2 mimo (4 total)    |     low3   = 6 calls
-|     +> low3  — 3 deepseek   |     medium = 3 calls (deepseek +
+|     +> low3  — 3 deepseek   |     medium = 3 calls (default, deepseek +
 |       + 3 mimo (6 total)    |       mimo + deepseek-v4-pro)
 |     +> medium — 1 deepseek  |     high  = 3 calls (deepseek-v4-pro
 |       + 1 mimo + 1 deepseek-v4-pro |       + minimax-m3 + qwen3.7-plus)
@@ -477,7 +474,7 @@ llm-fusion/
 ### Run from command line
 
 ```bash
-# Run with default (low2) tier
+# Run with default (medium) tier
 PYTHONPATH=skills/llm-fusion python3 -m scripts --query "What is 2+2?" --verbose
 
 # Choose a different tier (low1 / low2 / low3 / medium / high)
