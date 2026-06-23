@@ -8,6 +8,10 @@ Supports 8 scenarios: `coding`, `bugfix`, `qa`, `plan_review`, `creative`,
 `reasoning`, `document`, `general`. Each scenario has its own temperature profile,
 token budget, cleaning rules, and judge strategy.
 
+**5 tiers** — **low1** (2 fast calls), **low2** (4 calls, default),
+**low3** (6 calls), **medium** (adds deepseek-v4-pro for deeper reasoning),
+**high** (premium panel: deepseek-v4-pro + minimax-m3 + qwen3.7-plus).
+
 ---
 
 ## Quick Start
@@ -25,28 +29,50 @@ Then in chat (see following examples).
 ## Example (Explain Something to a 5-yo)
 
 ```bash
-llm-fusion low3 Explain Numerai's stake-weighted meta-model to a 5-yo in 5 lines
+llm-fusion: Explain Numerai's stake-weighted meta-model to a 5-yo in 5 lines
 ```
 
 **Panel responses**:
 
-- deepseek-v4-flash #1 — Guessing game about money movements. People put their own money behind guesses to show confidence. Meta-model mixes them, listens more to those who stake. Result is stronger and harder to trick.
-- deepseek-v4-flash #2 — Big guessing game about stocks. Confident people put their own money in. Their guesses count more. Combined final guess is smarter and more reliable.
-- deepseek-v4-flash #3 — Guessing game about stocks. People use tokens to show confidence. Meta-model pays more attention to bigger token holders. Everyone's guess mixed together is smarter.
-- mimo-v2.5 #1 — Kids making guesses, some put toys on the line. The ones who risk their toys get heard more. Their clues mixed together make a super-smart guess.
-- mimo-v2.5 #2 — Prediction contest. People put allowance money on their guesses. The more they bet, the more it counts. Extra weight for brave bettors.
-- mimo-v2.5 #3 — Group project guessing stocks. People bet allowance on their predictions. Those who've been right before and bet more get more weight.
+- deepseek-v4-flash #1 (1184 tokens, 720 reasoning tokens)
+  > Imagine many kids guess how many jellybeans are in a jar.
+  > The teacher wants the best guess, so she mixes all guesses together.
+  > But some kids put a token (stake) on their guess to show they are really sure.
+  > The teacher listens more to those kids because they put something on the line.
+  > That's how Numerai picks the best prediction – it listens more to people who put tokens down.
+
+- deepseek-v4-flash #2 (2456 tokens, 2036 reasoning tokens)
+  > 1. Imagine you and your friends are guessing how many candies are in a big jar.
+  > 2. Each friend has special coins that show how much they want their guess to matter.
+  > 3. When we make one group guess from all your guesses, we mix them together.
+  > 4. But if a friend has more coins, their guess is used more in the mix.
+  > 5. So, friends who put more coins get more say in the group guess.
+
+- mimo-v2.5 #1 (563 tokens, 181 reasoning)
+  > Imagine a hundred kids are each guessing how many jellybeans are in a jar, and the ones who say "I'll put my cookies on the table to bet I'm right" get a louder voice in the final answer.
+  > The louder kids' guesses are added up more, while quiet kids who didn't bet much barely count.
+  > This big, combined final guess -- using everyone's voice but weighted by how brave their cookie bet was -- is called the meta-model.
+  > Kids who guess wrong lose their cookies, so they only bet big when they're really sure, which makes the final answer much better!
+  > And that's how Numerai picks the best stock market guess by listening hardest to the people brave enough to risk their own treasure.
+
+- mimo-v2.5 #2 (1158 tokens, 428 reasoning)
+  > Thousands of people build computer programs to predict the stock market. Numerai combines everyone's predictions into one super-prediction called the "meta-model."
+  > Each participant can stake (bet) their own special tokens (NMR) on their prediction -- like putting allowance money on the table next to their answer.
+  > The more tokens a person stakes, the more influence their prediction has in the final meta-model.
+  > Person A stakes 1 token = small influence. Person B stakes 100 tokens = large influence.
+  > If someone is willing to bet a lot of their own money, they likely genuinely believe their model is good -- they have "skin in the game."
+
+Judge synthesis combined these into the 5-line candies-in-a-jar version with the explicit "bet your own candy → lose it if wrong → only bet when sure → final guess super accurate" causal chain.
 
 **Final answer**:
-
-- Numerai is a big guessing game where people try to predict the stock market.
-- Players put their own money or tokens on their guess to show how confident they are.
-- A special "meta-model" takes everyone's guesses and mixes them into one final answer.
-- It listens the most to the people who bet the most, because they are the most sure.
-- This makes the team's final guess much stronger, smarter, and harder to trick than any single guess alone.
+  > Imagine many kids guess how many candies are in a jar.
+  > The teacher mixes all the guesses to make one big final guess.
+  > But some kids bet their own candies on their guess to show they're extra sure.
+  > The teacher listens more to kids who bet a lot, because if they're wrong they lose their candy.
+  > So kids only bet big when they're right, making the final guess super accurate.
 
 **Stats**:
-─── Panel: 6/6 ok (3 ds4flash + 3 mimo) in 8.1s | Judge: single-stage in 33.9s | Total: 72s ───
+- Scenario: reasoning | Tier: low2 (default) | Panel: 4/4 ok in 30s | Judge: two-stage in 80s | Total: 144s
 
 
 ---
@@ -55,7 +81,7 @@ llm-fusion low3 Explain Numerai's stake-weighted meta-model to a 5-yo in 5 lines
 
 
 ```bash
-llm-fusion low1 What is the capital of Australia?
+llm-fusion low1: What is the capital of Australia?
 ```
 
 **Final answer**:
@@ -72,12 +98,10 @@ Scenario: qa | Panel: 0/0 (short-circuited) | 2643ms total
 
 
 ```bash
-llm-fusion low2 Write a bash one-liner to find the 5 largest files in a directory
+llm-fusion low2: Write a bash one-liner to find the 5 largest files in a directory
 ```
 
 **Final answer**:
-
-4 panel calls (2 deepseek-v4-flash + 2 mimo-v2.5), all succeeded.
 
 ```bash
 find "${1:-.}" -type f -printf '%s\t%p\0' 2>/dev/null | sort -z -t$'\t' -k1 -nr | head -z -n5 | cut -z -f2 | tr '\0' '\n'
@@ -100,22 +124,20 @@ Panel: 4/4 ok in 24s | Judge: 45s | Total: 73s
 ## Example (General QA)
 
 ```bash
-llm-fusion low2 Explain the difference between TCP and UDP with examples
+llm-fusion medium: Explain the difference between TCP and UDP with examples
 ```
 
 **Final answer**:
 
-Classified as general (fallback, 0.6 confidence). All 4 panel calls succeeded, judge synthesized.
+TCP — connection-oriented. Three-way handshake, acknowledgments, retransmissions. Guarantees reliable, ordered delivery.
+- Examples: file transfers (FTP), email (SMTP), web browsing (HTTP/HTTPS)
 
-TCP — connection-oriented, reliable, ordered. Guarantees delivery via handshake, retransmission, flow control.
-- Examples: HTTP/HTTPS, email (SMTP), FTP, SSH
+UDP — connectionless. No handshake, no confirmation. Prioritizes speed over reliability.
+- Examples: live video/audio streaming, VoIP, online gaming, DNS lookups
 
-UDP — connectionless, fire-and-forget. No handshake, no retransmission, no ordering. Fast and low-latency.
-- Examples: live video streaming, online gaming, VoIP, DNS lookups
+Bottom line: TCP for correctness (files, emails), UDP for speed (streaming, gaming).
 
-Key tradeoff: TCP is reliable but slower; UDP is fast but lossy. Pick based on whether you need data integrity (TCP) or speed with tolerable loss (UDP).
-
-Panel: 4/4 ok in 4.4s | Judge: 7.8s | Total: 73s
+Panel: 3/3 ok in 9.7s | Judge: single-stage in 15.8s | Total: 44s
 
 
 ---
@@ -123,32 +145,20 @@ Panel: 4/4 ok in 4.4s | Judge: 7.8s | Total: 73s
 ## Example (Reasoning)
 
 ```bash
-llm-fusion low2 Compare SQLite and PostgreSQL for a mobile app
+llm-fusion high: Compare SQLite and PostgreSQL for a mobile app
 ```
 
 **Final answer**:
 
-Classified as reasoning (0.9, LLM method) — used the two-stage judge for deeper synthesis. All 4 panel calls succeeded.
+Core verdict: They're complementary, not competitors.
 
-Key takeaway: They're complementary, not competitors, in mobile context.
+SQLite — embedded, serverless, ~600KB library, zero config, runs in-process. Built into iOS and Android. Perfect for on-device storage, offline-first, single-user. No network attack surface.
 
-SQLite (on-device)
-- Embedded, serverless, file-based — runs in-process
-- Tiny footprint (~300-600KB), negligible battery impact
-- Single-writer, sufficient for single-user mobile
-- Native support on iOS (Core Data) and Android (Room)
-- Zero config, no network needed, perfect offline
+PostgreSQL — client-server daemon, hundreds of MB, needs configuration and tuning. Cannot run on iOS/Android (no official builds, no daemon support, killed by OS for resource usage). Excellent for the remote backend server.
 
-PostgreSQL (server-side)
-- Client-server — requires a separate daemon, impractical on-device
-- Multi-writer MVCC, row-level locking, enterprise concurrency
-- Advanced features: replication, RLS, full-text search, JSONB
-- Scales to thousands of concurrent mobile clients via API layer
+Standard architecture: SQLite locally for offline data + PostgreSQL remotely with a sync/API layer between them. They serve different tiers — not an either/or choice.
 
-Typical architecture: SQLite on device for offline-first local storage + PostgreSQL on server as authoritative backend, with a sync layer between them.
-
-Panel: 4/4 ok in 55s | Judge (two-stage): 87s | Total: 150s
-
+Panel: 3/3 ok (deepseek-v4-pro + minimax-m3 + qwen3.7-plus) in 102s | Judge: two-stage in 152s | Total: 258s
 
 
 ---
