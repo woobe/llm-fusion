@@ -37,26 +37,26 @@ llm-fusion: Explain Numerai's stake-weighted meta-model to a 5-yo in 5 lines
 
 **Panel responses**:
 
-- deepseek-v4-flash (416 tokens, 358 reasoning)                                                                                                                    
-                                                                                                                                                                      
-  > Numerai is a game where people guess how stocks will move. 
-  > The meta-model combines everyone's guesses into one smart guess. 
-  > But people who have more stake (like points or tokens) get more say in that combined guess. 
-  > This rewards good guesses and helps the whole team win.                                             
-                                                                                                                                                                      
-- mimo-v2.5 (110 tokens, 22 reasoning)                                                                                                                             
-                                                                                                                                                                      
-  > Numerai is a game where lots of people try to guess how the stock market will move. 
-  > Each person puts their own money on their guesses to show they're really confident. 
-  > A smart computer then listens to everyone's guesses but trusts the people who put more money more. 
-  > It mixes all those guesses together into one super-smart prediction, like picking the best parts of every kid's crayon drawing to make one awesome picture.                                          
+- deepseek-v4-flash (416 tokens, 358 reasoning)
+
+  > Numerai is a game where people guess how stocks will move.
+  > The meta-model combines everyone's guesses into one smart guess.
+  > But people who have more stake (like points or tokens) get more say in that combined guess.
+  > This rewards good guesses and helps the whole team win.
+
+- mimo-v2.5 (110 tokens, 22 reasoning)
+
+  > Numerai is a game where lots of people try to guess how the stock market will move.
+  > Each person puts their own money on their guesses to show they're really confident.
+  > A smart computer then listens to everyone's guesses but trusts the people who put more money more.
+  > It mixes all those guesses together into one super-smart prediction, like picking the best parts of every kid's crayon drawing to make one awesome picture.
 
 
-- deepseek-v4-pro (577 tokens, 494 reasoning)                                                                                                                      
-                                                                                                                                                                      
-  > Think of Numerai as a big guessing game where lots of people try to predict the future. 
+- deepseek-v4-pro (577 tokens, 494 reasoning)
+
+  > Think of Numerai as a big guessing game where lots of people try to predict the future.
   > Each player bets their own special coins on how sure they are about their guess.
-  > The final guess is a blend of everyone's guesses, but guesses with more coins bet count more. 
+  > The final guess is a blend of everyone's guesses, but guesses with more coins bet count more.
   > This way, players are careful because they can lose their coins if they're wrong, and win more if they're right.
 
 
@@ -70,11 +70,11 @@ Judge synthesis (mimo-v2.5, single-stage, 333 tokens, 210 reasoning) blended all
   > Each player bets their own special coins to show how sure they are about their guess.
   > The game's smart computer makes a final guess by listening to everyone — but gives more importance to guesses from people who bet more coins.
   > This helps everyone try to guess carefully, because good guesses can win you more coins, and bad ones lose them.
-  > By mixing all the guesses this way, the final prediction becomes extra smart — like taking the best parts of every picture to make one great drawing.            
-                                                                                                                                                                      
+  > By mixing all the guesses this way, the final prediction becomes extra smart — like taking the best parts of every picture to make one great drawing.
+
 **Stats**:
 
-Panel: 3/3 ok in 14s | Judge: single-stage in 14s | Total: 42s      
+Panel: 3/3 ok in 14s | Judge: single-stage in 14s | Total: 42s
 
 
 ---
@@ -105,20 +105,21 @@ llm-fusion low2: Write a bash one-liner to find the 5 largest files in a directo
 
 **Final answer**:
 
-```bash
-find "${1:-.}" -type f -printf '%s\t%p\0' 2>/dev/null | sort -z -t$'\t' -k1 -nr | head -z -n5 | cut -z -f2 | tr '\0' '\n'
-```
+`find "${1:-.}" -maxdepth 1 -type f -printf '%s %p\n' 2>/dev/null | sort -rn | head -n 5`
 
-How it works:
-- find prints size + path, null-delimited (handles spaces/special chars)
-- sort -z sorts numerically descending by size
-- head -z -n5 keeps the top 5
-- cut -z -f2 strips sizes, leaving only paths
-- tr '\0' '\n' converts nulls to newlines for human reading
+Usage:
+  - Defaults to current directory, or pass a target: ./script.sh /path/to/dir
+  - For recursive search, drop -maxdepth 1
+  - Handles spaces, permission errors, and empty directories
 
-Pass a target directory as the first arg, or defaults to .
+Pipeline notes:
+  - Tier: low2 → 4 parallel calls (2× deepseek-v4-flash + 2× mimo-v2.5)
+  - Classification: coding (LLM classifier, 95% confidence)
+  - Panel: 4/4 succeeded in ~23s
+  - Judge: single-stage synthesis in ~66s — merged best parts (mimo's -printf approach, deepseek's error handling) and documented edge cases
+  - Total time: ~95s
 
-Panel: 4/4 ok in 24s | Judge: 45s | Total: 73s
+The judge picked find -printf '%s %p' as the cleanest approach over alternatives like du/stat/ls -lS, noting it's the most robust with special characters and permission errors.
 
 
 ---
