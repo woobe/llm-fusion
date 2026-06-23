@@ -8,9 +8,12 @@ Supports 8 scenarios: `coding`, `bugfix`, `qa`, `plan_review`, `creative`,
 `reasoning`, `document`, `general`. Each scenario has its own temperature profile,
 token budget, cleaning rules, and judge strategy.
 
-**5 tiers** — **low1** (2 fast calls), **low2** (4 calls, default),
-**low3** (6 calls), **medium** (adds deepseek-v4-pro for deeper reasoning),
-**high** (premium panel: deepseek-v4-pro + minimax-m3 + qwen3.7-plus).
+**5 tiers (effort)**
+- **low1**: 1 x deepseek-v4-flash + 1 x mimo-v2.5
+- **low2**: 2 x deepseek-v4-flash + 2 x mimo-v2.5 (default tier)
+- **low3**: 3 x deepseek-v4-flash + 3 x mimo-v2.5
+- **medium**: 1 x deepseek-v4-flash + 1 x mimo-v2.5 + 1 x deepseek-v4-pro
+- **high**: 1 x deepseek-v4-pro + 1 x minimax-m3 + 1 x qwen3.7-plus
 
 ---
 
@@ -35,44 +38,46 @@ llm-fusion: Explain Numerai's stake-weighted meta-model to a 5-yo in 5 lines
 **Panel responses**:
 
 - deepseek-v4-flash #1 (1184 tokens, 720 reasoning tokens)
-  > Imagine many kids guess how many jellybeans are in a jar.
-  > The teacher wants the best guess, so she mixes all guesses together.
-  > But some kids put a token (stake) on their guess to show they are really sure.
-  > The teacher listens more to those kids because they put something on the line.
-  > That's how Numerai picks the best prediction – it listens more to people who put tokens down.
+  - Imagine many kids guess how many jellybeans are in a jar.
+  - The teacher wants the best guess, so she mixes all guesses together.
+  - But some kids put a token (stake) on their guess to show they are really sure.
+  - The teacher listens more to those kids because they put something on the line.
+  - That's how Numerai picks the best prediction – it listens more to people who put tokens down.
 
 - deepseek-v4-flash #2 (2456 tokens, 2036 reasoning tokens)
-  > 1. Imagine you and your friends are guessing how many candies are in a big jar.
-  > 2. Each friend has special coins that show how much they want their guess to matter.
-  > 3. When we make one group guess from all your guesses, we mix them together.
-  > 4. But if a friend has more coins, their guess is used more in the mix.
-  > 5. So, friends who put more coins get more say in the group guess.
+  - Imagine you and your friends are guessing how many candies are in a big jar.
+  - Each friend has special coins that show how much they want their guess to matter.
+  - When we make one group guess from all your guesses, we mix them together.
+  - But if a friend has more coins, their guess is used more in the mix.
+  - So, friends who put more coins get more say in the group guess.
 
 - mimo-v2.5 #1 (563 tokens, 181 reasoning)
-  > Imagine a hundred kids are each guessing how many jellybeans are in a jar, and the ones who say "I'll put my cookies on the table to bet I'm right" get a louder voice in the final answer.
-  > The louder kids' guesses are added up more, while quiet kids who didn't bet much barely count.
-  > This big, combined final guess -- using everyone's voice but weighted by how brave their cookie bet was -- is called the meta-model.
-  > Kids who guess wrong lose their cookies, so they only bet big when they're really sure, which makes the final answer much better!
-  > And that's how Numerai picks the best stock market guess by listening hardest to the people brave enough to risk their own treasure.
+  - Imagine a hundred kids are each guessing how many jellybeans are in a jar, and the ones who say "I'll put my cookies on the table to bet I'm right" get a louder voice in the final answer.
+  - The louder kids' guesses are added up more, while quiet kids who didn't bet much barely count.
+  - This big, combined final guess -- using everyone's voice but weighted by how brave their cookie bet was -- is called the meta-model.
+  - Kids who guess wrong lose their cookies, so they only bet big when they're really sure, which makes the final answer much better!
+  - And that's how Numerai picks the best stock market guess by listening hardest to the people brave enough to risk their own treasure.
 
 - mimo-v2.5 #2 (1158 tokens, 428 reasoning)
-  > Thousands of people build computer programs to predict the stock market. Numerai combines everyone's predictions into one super-prediction called the "meta-model."
-  > Each participant can stake (bet) their own special tokens (NMR) on their prediction -- like putting allowance money on the table next to their answer.
-  > The more tokens a person stakes, the more influence their prediction has in the final meta-model.
-  > Person A stakes 1 token = small influence. Person B stakes 100 tokens = large influence.
-  > If someone is willing to bet a lot of their own money, they likely genuinely believe their model is good -- they have "skin in the game."
-
-Judge synthesis combined these into the 5-line candies-in-a-jar version with the explicit "bet your own candy → lose it if wrong → only bet when sure → final guess super accurate" causal chain.
+  - Thousands of people build computer programs to predict the stock market. Numerai combines everyone's predictions into one super-prediction called the "meta-model."
+  - Each participant can stake (bet) their own special tokens (NMR) on their prediction -- like putting allowance money on the table next to their answer.
+  - The more tokens a person stakes, the more influence their prediction has in the final meta-model.
+  - Person A stakes 1 token = small influence. Person B stakes 100 tokens = large influence.
+  - If someone is willing to bet a lot of their own money, they likely genuinely believe their model is good -- they have "skin in the game."
 
 **Final answer**:
-  > Imagine many kids guess how many candies are in a jar.
-  > The teacher mixes all the guesses to make one big final guess.
-  > But some kids bet their own candies on their guess to show they're extra sure.
-  > The teacher listens more to kids who bet a lot, because if they're wrong they lose their candy.
-  > So kids only bet big when they're right, making the final guess super accurate.
+
+Judge synthesis combined all responses into the 5-line candies-in-a-jar version with the explicit "bet your own candy → lose it if wrong → only bet when sure → final guess super accurate" causal chain.
+
+  - Imagine many kids guess how many candies are in a jar.
+  - The teacher mixes all the guesses to make one big final guess.
+  - But some kids bet their own candies on their guess to show they're extra sure.
+  - The teacher listens more to kids who bet a lot, because if they're wrong they lose their candy.
+  - So kids only bet big when they're right, making the final guess super accurate.
 
 **Stats**:
-- Scenario: reasoning | Tier: low2 (default) | Panel: 4/4 ok in 30s | Judge: two-stage in 80s | Total: 144s
+
+Scenario: reasoning | Tier: low2 (default) | Panel: 4/4 ok in 30s | Judge: two-stage in 80s | Total: 144s
 
 
 ---
@@ -129,11 +134,11 @@ llm-fusion medium: Explain the difference between TCP and UDP with examples
 
 **Final answer**:
 
-TCP — connection-oriented. Three-way handshake, acknowledgments, retransmissions. Guarantees reliable, ordered delivery.
-- Examples: file transfers (FTP), email (SMTP), web browsing (HTTP/HTTPS)
+- TCP — connection-oriented. Three-way handshake, acknowledgments, retransmissions. Guarantees reliable, ordered delivery.
+  - Examples: file transfers (FTP), email (SMTP), web browsing (HTTP/HTTPS)
 
-UDP — connectionless. No handshake, no confirmation. Prioritizes speed over reliability.
-- Examples: live video/audio streaming, VoIP, online gaming, DNS lookups
+- UDP — connectionless. No handshake, no confirmation. Prioritizes speed over reliability.
+  - Examples: live video/audio streaming, VoIP, online gaming, DNS lookups
 
 Bottom line: TCP for correctness (files, emails), UDP for speed (streaming, gaming).
 
