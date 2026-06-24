@@ -267,7 +267,15 @@ user query
 
 ## Changelog
 
-### v0.2.8 (current)
+### v0.2.9 (current)
+- **Classifier optimization** — added `classification.enabled: false` config flag
+  - LLM second-pass classifier now opt-in only (default: disabled)
+  - Saves 1 API call per general query
+  - Backward compatible: existing configs default to `enabled: false`
+- 4 new unit tests added (disabled, missing-key, enabled, high-confidence bypass)
+- 100 tests passing
+
+### v0.2.8
 - **Swapped judge model** — deepseek-v4-flash → mimo-v2.5 (temp=1.0, top_p=0.95, thinking.enabled, max_tokens=4096)
 - **Improved judge latency** — validated avg 8.8s vs 15-35s for deepseek-v4-flash
 - **Fixed empty-answer bug** — thinking tokens consumed entire 2048 budget; raised to 4096
@@ -508,26 +516,6 @@ PYTHONPATH=skills/llm-fusion python3 -m scripts --query "What is 2+2?"
 - API keys read from environment or `~/.hermes/.env` only
 - Never commit `.env` files or API keys
 - Config examples use placeholders, never real secrets
-
----
-
-## Changelog
-
-### v0.2.9 (2026-06-24)
-
-- **Classifier optimization**: Added `classification.enabled: false` config flag
-  - LLM second-pass classifier now opt-in only (default: disabled)
-  - Saves 1 API call per general query
-  - Backward compatible: existing configs default to `enabled: false`
-- 4 new unit tests added (disabled, missing-key, enabled, high-confidence bypass)
-- 100 tests passing
-
-### v0.2.8 (2026-06-23)
-
-- Default tier changed from low2 → medium
-- Judge model swap from DeepSeek → Mimo v2.5
-- Token budget and timeout tuning
-- Optimization recommendations saved to `local/optimization_recommendations.md`
 
 ---
 
