@@ -257,6 +257,298 @@ JUDGE_SYSTEM_PROMPTS_STAGE2 = {
     ),
 }
 
+# ---------------------------------------------------------------------------
+# Prompt-size budgeting — estimate input size before judge calls and
+# smart-trim responses by model priority when the budget is exceeded.
+# ---------------------------------------------------------------------------
+
+# Model priority order: models listed first are highest priority (trimmed last).
+# Based on typical quality and diversity contribution.
+_MODEL_PRIORITY = [
+    "deepseek-v4-pro",
+    "qwen3.7-plus",
+    "minimax-m3",
+    "mimo-v2.5",
+    "deepseek-v4-flash",
+]
+
+# Default context window sizes (fallback when config is absent).
+# These are conservative estimates; real values may differ per provider.
+_DEFAULT_CONTEXT_WINDOWS = {
+    "mimo-v2.5": 32000,
+    "deepseek-v4-flash": 64000,
+    "deepseek-v4-pro": 64000,
+    "minimax-m3": 128000,
+    "qwen3.7-plus": 131072,
+}
+
+# Safety margin: reserve tokens for system prompt, query text, role wrappers,
+# and output tokens so the caller does not exceed the model's true context.
+_CONTEXT_SAFETY_MARGIN = 4000
+
+# Rough character-to-token ratio for estimating input size (English text).
+_CHARS_PER_TOKEN = 4.0
+
+
+def _chars_to_tokens(text_or_chars):
+    """Estimate token count from character count (rough heuristic).
+
+    Uses ~4 chars per token for English text.  Pass either a string
+    (whose length is used) or an integer character count.
+    Returns at least 1.
+    """
+    if isinstance(text_or_chars, str):
+        text_or_chars = len(text_or_chars)
+    return max(1, int(text_or_chars / _CHARS_PER_TOKEN))
+
+
+def _resolve_prompt_budget_config(judge_config, model=None):
+    """Resolve prompt budget settings from *judge_config*.
+
+    Parameters
+    ----------
+    judge_config : dict or None
+        Judge-specific configuration dict.  May contain a ``prompt_budget``
+        sub-dict with keys: ``enabled``, ``max_input_tokens``,
+        ``input_budget_chars``, ``model_context_window``.
+    model : str or None
+        Model name.  Used to look up a default context window when the
+        config does not specify one explicitly.
+
+    Returns
+    -------
+    dict with keys:
+        enabled : bool
+        max_input_tokens : int
+            Context window minus safety margin (or explicit value).
+        input_budget_chars : int or None
+            Explicit character budget from config, converted to tokens
+            internally but preserved for metadata.
+        model_context_window : int
+    """
+    budget = {}
+    if judge_config and isinstance(judge_config, dict):
+        raw = judge_config.get("prompt_budget", {})
+        if isinstance(raw, dict):
+            budget = raw
+
+    enabled = budget.get("enabled")
+    if enabled is None:
+        enabled = True  # default: enabled
+
+    input_budget_chars = budget.get("input_budget_chars")
+
+    model_name = model or (judge_config or {}).get("model", "mimo-v2.5")
+    fallback_ctx = _DEFAULT_CONTEXT_WINDOWS.get(model_name, 32000)
+
+    explicit_ctx = budget.get("model_context_window")
+    if explicit_ctx is not None:
+        context_window = int(explicit_ctx)
+    else:
+        context_window = fallback_ctx
+
+    explicit_max = budget.get("max_input_tokens")
+    if explicit_max is not None:
+        max_input_tokens = int(explicit_max)
+    elif input_budget_chars is not None:
+        # Convert character budget to approximate token budget
+        max_input_tokens = max(
+            512, int(int(input_budget_chars) / _CHARS_PER_TOKEN)
+        )
+    else:
+        max_input_tokens = context_window - _CONTEXT_SAFETY_MARGIN
+
+    return {
+        "enabled": bool(enabled),
+        "max_input_tokens": max(max_input_tokens, 512),  # floor at 512
+        "input_budget_chars": int(input_budget_chars) if input_budget_chars is not None else None,
+        "model_context_window": context_window,
+    }
+
+
+def _get_model_priority_weight(model_name):
+    """Return priority weight for *model_name* (higher = keep more chars).
+
+    The highest-priority model gets ``len(_MODEL_PRIORITY)``, the lowest
+    gets ``1``.  Unknown models default to ``1`` (lowest priority).
+    """
+    name_lower = (model_name or "").lower()
+    for i, name in enumerate(_MODEL_PRIORITY):
+        if name in name_lower:
+            return len(_MODEL_PRIORITY) - i
+    return 1
+
+
+def _smart_trim_responses(responses, query, system_prompt, budget_config):
+    """Trim responses when the estimated prompt exceeds the budget.
+
+    Strategy: trim lower-priority responses more aggressively than
+    higher-priority ones.  Each response keeps at minimum 200 characters.
+
+    Parameters
+    ----------
+    responses : list of dict
+        Panel responses with ``label``, and ``cleaned_content`` or ``content``.
+    query : str
+        Original user query.
+    system_prompt : str
+        Judge system prompt.
+    budget_config : dict
+        Prompt budget config from :func:`_resolve_prompt_budget_config`.
+
+    Returns
+    -------
+    (list_of_dict, metadata_dict)
+        ``responses`` may be a new list (original is not mutated).
+        ``metadata`` describes what (if anything) was trimmed.
+    """
+    metadata = {
+        "prompt_budget_enabled": budget_config.get("enabled", True),
+        "prompt_budget_exceeded": False,
+        "prompt_budget_chars": budget_config.get("max_input_tokens", 0),
+        "prompt_budget_warning": False,
+        "prompt_budget_strategy": "none",
+        "estimated_input_chars_before": 0,
+        "estimated_input_tokens_before": 0,
+        "estimated_input_chars_after": 0,
+        "estimated_input_tokens_after": 0,
+        "input_chars": 0,
+        "input_estimated_tokens": 0,
+        "compaction_applied": None,
+    }
+
+    if not budget_config.get("enabled", True):
+        metadata["prompt_budget_strategy"] = "disabled"
+        return list(responses), metadata
+
+    # Build the responses section to get an accurate character estimate
+    responses_section = _build_responses_section(responses)
+    total_chars = (
+        len(system_prompt or "")
+        + len(query or "")
+        + len(responses_section)
+    )
+    total_tokens = _chars_to_tokens(total_chars) + 50  # +50 for role wrappers
+
+    metadata["estimated_input_chars_before"] = total_chars
+    metadata["estimated_input_tokens_before"] = total_tokens
+
+    max_input = budget_config["max_input_tokens"]
+    if total_tokens <= max_input:
+        # Within budget — no trimming needed
+        metadata["estimated_input_chars_after"] = total_chars
+        metadata["estimated_input_tokens_after"] = total_tokens
+        metadata["input_chars"] = total_chars
+        metadata["input_estimated_tokens"] = total_tokens
+        metadata["prompt_budget_strategy"] = "within_budget"
+        return list(responses), metadata
+
+    # Budget exceeded — smart-trim by model priority
+    metadata["prompt_budget_exceeded"] = True
+
+    # Copy responses so we never mutate the caller's list
+    trimmed = [
+        {
+            "label": r.get("label", "Response"),
+            "model": r.get("model", ""),
+            "content": r.get("cleaned_content") or r.get("content", ""),
+        }
+        for r in responses
+    ]
+
+    # Sort by priority (ascending — lowest priority first) so we trim
+    # the least valuable responses first.
+    indexed = [
+        (i, _get_model_priority_weight(r.get("model", "")))
+        for i, r in enumerate(trimmed)
+    ]
+    indexed.sort(key=lambda x: x[1])  # lowest weight first
+
+    target_reduction_chars = (total_tokens - max_input) * _CHARS_PER_TOKEN
+    trimmed_chars = 0
+    trimmed_count = 0
+    MIN_RESPONSE_CHARS = 200
+
+    # Pass 1: halve each low-priority response until we meet the target
+    for idx, _weight in indexed:
+        if trimmed_chars >= target_reduction_chars:
+            break
+        content = trimmed[idx].get("content", "")
+        original_len = len(content)
+        if original_len <= MIN_RESPONSE_CHARS:
+            continue  # already at minimum
+        # Reduce to halfway between current and minimum
+        target_len = max(MIN_RESPONSE_CHARS, int(original_len * 0.5))
+        if target_len < original_len:
+            # Append a marker so the judge knows trimming occurred
+            new_content = (
+                content[:target_len]
+                + "\n\n[trimmed from {} to {} chars by prompt budget]".format(
+                    original_len, target_len
+                )
+            )
+            trimmed[idx]["content"] = new_content
+            trimmed_chars += original_len - target_len
+            trimmed_count += 1
+
+    # If still over budget after pass 1, trim ALL responses uniformly
+    if trimmed_chars < target_reduction_chars:
+        remaining_chars = target_reduction_chars - trimmed_chars
+        # Recalculate total chars of trimmed responses
+        re_section = _build_responses_section(trimmed)
+        current_total = (
+            len(system_prompt or "")
+            + len(query or "")
+            + len(re_section)
+        )
+        # Truncation ratio based on remaining reduction needed
+        if current_total > 0:
+            ratio = max(
+                0.3,  # never trim more than 70% of remaining
+                1.0 - (remaining_chars / current_total),
+            )
+            for entry in trimmed:
+                content = entry.get("content", "")
+                original_len = len(content)
+                if original_len > MIN_RESPONSE_CHARS:
+                    target_len = max(
+                        MIN_RESPONSE_CHARS, int(original_len * ratio)
+                    )
+                    if target_len < original_len:
+                        entry["content"] = (
+                            content[:target_len]
+                            + "\n\n[uniform trimmed to {} chars by prompt budget]".format(
+                                target_len
+                            )
+                        )
+
+    # Recalculate after all trimming
+    final_section = _build_responses_section(trimmed)
+    total_chars_after = (
+        len(system_prompt or "")
+        + len(query or "")
+        + len(final_section)
+    )
+    total_tokens_after = _chars_to_tokens(total_chars_after) + 50
+
+    metadata["estimated_input_chars_after"] = total_chars_after
+    metadata["estimated_input_tokens_after"] = total_tokens_after
+    metadata["input_chars"] = total_chars_after
+    metadata["input_estimated_tokens"] = total_tokens_after
+    metadata["compaction_applied"] = (
+        "smart_trim_by_priority"
+        if trimmed_count > 0
+        else "uniform_trim"
+    )
+    metadata["prompt_budget_strategy"] = metadata["compaction_applied"]
+    # Warning if after-trim still uses >85% of budget
+    metadata["prompt_budget_warning"] = total_tokens_after > 0.85 * max_input
+    metadata["trimmed_response_count"] = trimmed_count
+    metadata["trimmed_chars"] = trimmed_chars
+
+    return trimmed, metadata
+
+
 def _merge_judge_call_config(judge_config, stage_config=None):
     """Merge top-level judge config with an optional stage override.
 
@@ -422,9 +714,18 @@ def judge_single_stage(query, responses, scenario_id, config=None, judge_config=
         JUDGE_SYSTEM_PROMPTS_SINGLE["general"],
     )
 
+    # --- Prompt-size budgeting ---
+    budget_config = _resolve_prompt_budget_config(judge_config)
+    trimmed_responses, budget_meta = _smart_trim_responses(
+        responses, query, system_prompt, budget_config,
+    )
+    result.update(budget_meta)
+
     # Build responses section with optional truncation
     max_chars = judge_config.get("max_panel_response_chars")
-    responses_section = _build_responses_section(responses, max_chars=max_chars)
+    responses_section = _build_responses_section(
+        trimmed_responses, max_chars=max_chars,
+    )
 
     user_prompt = (
         f"Original query: {query}\n\n"
@@ -555,10 +856,23 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
         judge_retries = retry_cfg.get("max_retries", 2)
         judge_delays = retry_cfg.get("delays_seconds", [1, 3])
 
+    # --- Stage 1: Analysis system prompt (needed for prompt budgeting below) ---
+    stage1_system = JUDGE_SYSTEM_PROMPTS_STAGE1.get(
+        scenario_id,
+        "You are an analysis expert. Analyze the following responses in detail.",
+    )
+
+    # --- Prompt-size budgeting ---
+    budget_config = _resolve_prompt_budget_config(judge_config)
+    trimmed_responses, budget_meta = _smart_trim_responses(
+        responses, query, stage1_system, budget_config,
+    )
+    result.update(budget_meta)
+
     # Build responses section with optional truncation and stats
     max_chars = judge_config.get("max_panel_response_chars")
     responses_section, response_stats = _build_responses_section(
-        responses, max_chars=max_chars, return_stats=True
+        trimmed_responses, max_chars=max_chars, return_stats=True
     )
     include_responses_in_stage2 = judge_config.get("stage2_include_raw_responses", False)
 
@@ -567,12 +881,6 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
     result["panel_response_truncated_chars"] = response_stats["truncated_chars"]
     result["max_panel_response_chars"] = response_stats["max_panel_response_chars"]
     result["stage2_include_raw_responses"] = include_responses_in_stage2
-
-    # --- Stage 1: Analysis ---
-    stage1_system = JUDGE_SYSTEM_PROMPTS_STAGE1.get(
-        scenario_id,
-        "You are an analysis expert. Analyze the following responses in detail.",
-    )
 
     stage1_prompt = (
         f"Original query: {query}\n\n"
@@ -615,6 +923,13 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
         "usage": stage1_result.get("usage"),
         "error": stage1_result.get("error"),
         "elapsed": stage1_elapsed,
+        "input_chars": result.get("stage1_input_chars", 0),
+        "input_estimated_tokens": result.get("estimated_input_tokens_after", 0),
+        "budget_compacted": result.get("prompt_budget_exceeded", False),
+        "budget_warning": result.get("prompt_budget_warning", False),
+        "budget_chars": result.get("prompt_budget_chars", 0),
+        "panel_response_compacted_count": result.get("trimmed_response_count", 0),
+        "panel_response_compacted_chars": result.get("trimmed_chars", 0),
     }
 
     if not stage1_result["success"]:
@@ -644,6 +959,89 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
             f"{stage1_content}\n\n"
             f"Synthesize the definitive final answer. Be thorough — this is the output the user will see."
         )
+
+    # --- Stage 2 prompt-size budgeting ---
+    stage2_budget_meta = {
+        "budget_compacted": False,
+        "budget_warning": False,
+        "stage_content_compacted": False,
+        "stage_content_compacted_chars": 0,
+    }
+    if budget_config.get("enabled", True):
+        max_input = budget_config["max_input_tokens"]
+        stage2_system_len = len(stage2_system or "")
+        stage2_prompt_len = len(stage2_prompt)
+        stage2_total_chars = stage2_system_len + stage2_prompt_len
+        stage2_total_tokens = _chars_to_tokens(stage2_total_chars) + 50
+
+        stage2_budget_meta["budget_warning"] = stage2_total_tokens > 0.85 * max_input
+
+        if stage2_total_tokens > max_input:
+            # Over budget — compact stage1_content (and raw responses if included)
+            excess_tokens = stage2_total_tokens - max_input
+            excess_chars = int(excess_tokens * _CHARS_PER_TOKEN)
+
+            # If raw responses are included, compact or drop them first
+            raw_compacted = False
+            if include_responses_in_stage2:
+                # Replace raw responses section with a compact summary marker
+                stage2_prompt = (
+                    f"Original query: {query}\n\n"
+                    f"Below is a compact evidence bundle followed by a structured analysis:\n\n"
+                    f"(Raw panel responses compacted by prompt budget — "
+                    f"see stage 1 analysis below for detail)\n\n"
+                    f"Below is a structured analysis of these responses:\n\n"
+                    f"{stage1_content}\n\n"
+                    f"Synthesize the definitive final answer. Be thorough — this is the output the user will see."
+                )
+                raw_compacted = True
+                # Recalculate after raw-response removal
+                stage2_prompt_len = len(stage2_prompt)
+                stage2_total_chars = stage2_system_len + stage2_prompt_len
+                stage2_total_tokens = _chars_to_tokens(stage2_total_chars) + 50
+                excess_tokens = max(0, stage2_total_tokens - max_input)
+                excess_chars = int(excess_tokens * _CHARS_PER_TOKEN)
+
+            # Compact stage1_content if still over budget
+            if excess_tokens > 0:
+                stage1_original_len = len(stage1_content)
+                MIN_STAGE1_CHARS = 200
+                target_len = max(MIN_STAGE1_CHARS, stage1_original_len - excess_chars)
+                if target_len < stage1_original_len:
+                    stage1_content = (
+                        stage1_content[:target_len]
+                        + "\n\n[stage 2 budget: compacted from {} to {} chars]".format(
+                            stage1_original_len, target_len
+                        )
+                    )
+                    stage2_budget_meta["stage_content_compacted"] = True
+                    stage2_budget_meta["stage_content_compacted_chars"] = (
+                        stage1_original_len - target_len
+                    )
+
+            stage2_budget_meta["budget_compacted"] = True
+
+            # Rebuild the prompt with compacted content
+            if include_responses_in_stage2:
+                if raw_compacted:
+                    # Already rebuilt above; update stage1_content reference
+                    pass
+                else:
+                    stage2_prompt = (
+                        f"Original query: {query}\n\n"
+                        f"Below are {len(responses)} independent responses from different models.\n\n"
+                        f"{responses_section}\n\n"
+                        f"Below is a structured analysis of these responses:\n\n"
+                        f"{stage1_content}\n\n"
+                        f"Synthesize the definitive final answer. Be thorough — this is the output the user will see."
+                    )
+            else:
+                stage2_prompt = (
+                    f"Original query: {query}\n\n"
+                    f"Below is a structured analysis of the responses:\n\n"
+                    f"{stage1_content}\n\n"
+                    f"Synthesize the definitive final answer. Be thorough — this is the output the user will see."
+                )
 
     result["stage2_input_chars"] = len(stage2_prompt)
 
@@ -677,7 +1075,11 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
         "usage": stage2_result.get("usage"),
         "error": stage2_result.get("error"),
         "elapsed": total_elapsed - stage1_elapsed,
+        "input_chars": result.get("stage2_input_chars", 0),
+        "input_estimated_tokens": max(1, int(result.get("stage2_input_chars", 0) / 4)),
     }
+    # Preserve budget metadata added before the stage 2 call
+    result["stage2"].update(stage2_budget_meta)
 
     result["success"] = stage2_result["success"]
     result["content"] = stage2_content

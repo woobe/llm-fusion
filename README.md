@@ -267,7 +267,18 @@ user query
 
 ## Changelog
 
-### v0.2.12 (current)
+### v0.2.13 (current)
+- **Prompt-Size Budgeting** — estimates input size before judge calls, trims by model priority + scenario boundaries
+  - New `_apply_prompt_budget()` helper estimates total input before judge calls
+  - New `_compact_sections()` performs section-compaction (not raw first-N chars)
+  - Config keys: `prompt_budget.enabled`, `prompt_budget.strategy`, `prompt_budget.max_input_chars`, per-scenario budgets
+  - Budget applied before single-stage, two-stage stage 1, and two-stage stage 2 judge calls
+  - Metadata: `prompt_budget_applied`, `prompt_budget_strategy`, `prompt_budget_input_chars`, `prompt_budget_trimmed_chars`
+  - Config added to all 8 scenarios in both bundled configs
+  - 18 new tests in TestPromptBudget + 2 config-smoke tests
+  - 259 tests passing (was 241)
+
+### v0.2.12
 - **Two-Stage Judge Token Reduction** — stage 2 now receives compact evidence bundle only (not raw panel responses)
   - New `_evidence_bundle_instructions()` helper structures stage 1 output (verdict, key_findings, contradictions, best_evidence, synthesis_plan)
   - `stage2_include_raw_responses` config flag (default: `false`) — opt in with `true` for full replay

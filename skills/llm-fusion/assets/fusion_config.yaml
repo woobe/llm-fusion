@@ -56,6 +56,8 @@ fusion:
       thinking:
         type: enabled
       max_tokens: 4096
+      prompt_budget:
+        enabled: true
 
   scenarios:
     coding:
@@ -84,6 +86,8 @@ fusion:
           max_tokens: 6144
         stage2:
           max_tokens: 6144
+        prompt_budget:
+          input_budget_chars: 24000
     qa:
       panel:
         deepseek:
@@ -95,6 +99,8 @@ fusion:
       judge:
         stages: single
         max_panel_response_chars: 1200
+        prompt_budget:
+          input_budget_chars: 10000
     plan_review:
       panel:
         deepseek:
@@ -111,6 +117,8 @@ fusion:
           max_tokens: 6144
         stage2:
           max_tokens: 6144
+        prompt_budget:
+          input_budget_chars: 30000
     creative:
       panel:
         deepseek:
@@ -137,6 +145,8 @@ fusion:
           max_tokens: 6144
         stage2:
           max_tokens: 6144
+        prompt_budget:
+          input_budget_chars: 24000
     document:
       panel:
         deepseek:
@@ -153,6 +163,8 @@ fusion:
           max_tokens: 6144
         stage2:
           max_tokens: 6144
+        prompt_budget:
+          input_budget_chars: 32000
     general:
       panel:
         deepseek:
@@ -164,6 +176,8 @@ fusion:
       judge:
         stages: single
         max_panel_response_chars: 1800
+        prompt_budget:
+          input_budget_chars: 16000
 
   cleaning:
     profiles:

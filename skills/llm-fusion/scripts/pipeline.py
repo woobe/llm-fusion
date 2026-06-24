@@ -452,17 +452,35 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
                         "stage2_include_raw_responses", False
                     ),
                     "max_panel_response_chars": judge_config.get("max_panel_response_chars"),
+                    "prompt_budget": {
+                        "enabled": judge_result.get("prompt_budget_enabled"),
+                        "chars_per_token": 4,
+                        "strategy": judge_result.get("prompt_budget_strategy", "none"),
+                        "warning": judge_result.get("prompt_budget_warning"),
+                        "budget_chars": judge_result.get("prompt_budget_chars"),
+                        "input_budget_chars": (judge_config or {}).get("prompt_budget", {}).get("input_budget_chars"),
+                    },
                 },
                 "stage1": {
                     "success": judge_result.get("stage1", {}).get("success"),
                     "usage": judge_result.get("stage1", {}).get("usage"),
                     "elapsed": judge_result.get("stage1", {}).get("elapsed", 0),
                     "input_chars": judge_result.get("stage1_input_chars", 0),
+                    "input_estimated_tokens": judge_result.get("stage1", {}).get("input_estimated_tokens", 0),
+                    "budget_chars": judge_result.get("stage1", {}).get("budget_chars", 0),
+                    "budget_compacted": judge_result.get("stage1", {}).get("budget_compacted", False),
+                    "budget_warning": judge_result.get("stage1", {}).get("budget_warning", False),
                     "panel_response_truncated_count": judge_result.get(
                         "panel_response_truncated_count", 0
                     ),
                     "panel_response_truncated_chars": judge_result.get(
                         "panel_response_truncated_chars", 0
+                    ),
+                    "panel_response_compacted_count": judge_result.get("stage1", {}).get(
+                        "panel_response_compacted_count", 0
+                    ),
+                    "panel_response_compacted_chars": judge_result.get("stage1", {}).get(
+                        "panel_response_compacted_chars", 0
                     ),
                 },
                 "stage2": {
@@ -470,9 +488,14 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
                     "usage": judge_result.get("stage2", {}).get("usage"),
                     "elapsed": judge_result.get("stage2", {}).get("elapsed", 0),
                     "input_chars": judge_result.get("stage2_input_chars", 0),
+                    "input_estimated_tokens": max(1, int(judge_result.get("stage2_input_chars", 0) / 4)),
                     "include_raw_responses": judge_result.get(
                         "stage2_include_raw_responses", False
                     ),
+                    "budget_compacted": judge_result.get("stage2", {}).get("budget_compacted", False),
+                    "budget_warning": judge_result.get("stage2", {}).get("budget_warning", False),
+                    "stage_content_compacted": judge_result.get("stage2", {}).get("stage_content_compacted", False),
+                    "stage_content_compacted_chars": judge_result.get("stage2", {}).get("stage_content_compacted_chars", 0),
                 },
             }
         else:
@@ -484,9 +507,28 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
                     "max_completion_tokens": judge_config.get("max_completion_tokens"),
                     "reasoning_mode": judge_config.get("reasoning_mode"),
                     "thinking": judge_config.get("thinking"),
+                    "prompt_budget": {
+                        "enabled": judge_result.get("prompt_budget_enabled"),
+                        "chars_per_token": 4,
+                        "strategy": judge_result.get("prompt_budget_strategy", "none"),
+                        "warning": judge_result.get("prompt_budget_warning"),
+                        "budget_chars": judge_result.get("prompt_budget_chars"),
+                        "input_budget_chars": (judge_config or {}).get("prompt_budget", {}).get("input_budget_chars"),
+                    },
                 },
                 "usage": judge_result.get("usage"),
                 "elapsed": judge_result.get("elapsed", 0),
+                "prompt_budget": {
+                    "enabled": judge_result.get("prompt_budget_enabled"),
+                    "exceeded": judge_result.get("prompt_budget_exceeded"),
+                    "estimated_input_tokens_before": judge_result.get("estimated_input_tokens_before"),
+                    "estimated_input_tokens_after": judge_result.get("estimated_input_tokens_after"),
+                    "estimated_input_chars_before": judge_result.get("estimated_input_chars_before"),
+                    "estimated_input_chars_after": judge_result.get("estimated_input_chars_after"),
+                    "compaction": judge_result.get("compaction_applied"),
+                    "trimmed_response_count": judge_result.get("trimmed_response_count"),
+                    "trimmed_chars": judge_result.get("trimmed_chars"),
+                },
             }
 
         # Set level based on judge success

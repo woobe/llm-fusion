@@ -6,14 +6,12 @@
 
 fusion:
   version: "2.0.0"
-
   classification:
     enabled: false
     confidence_threshold: 0.85
     llm_model: deepseek-v4-flash
     llm_temp: 0.0
     llm_max_tokens: 100
-
   default:
     panel:
       models:
@@ -58,7 +56,8 @@ fusion:
       thinking:
         type: enabled
       max_tokens: 4096
-
+      prompt_budget:
+        enabled: true
   scenarios:
     coding:
       panel:
@@ -86,6 +85,8 @@ fusion:
           max_tokens: 6144
         stage2:
           max_tokens: 6144
+        prompt_budget:
+          input_budget_chars: 24000
     qa:
       panel:
         deepseek:
@@ -97,6 +98,8 @@ fusion:
       judge:
         stages: single
         max_panel_response_chars: 1200
+        prompt_budget:
+          input_budget_chars: 10000
     plan_review:
       panel:
         deepseek:
@@ -113,6 +116,8 @@ fusion:
           max_tokens: 6144
         stage2:
           max_tokens: 6144
+        prompt_budget:
+          input_budget_chars: 30000
     creative:
       panel:
         deepseek:
@@ -139,6 +144,8 @@ fusion:
           max_tokens: 6144
         stage2:
           max_tokens: 6144
+        prompt_budget:
+          input_budget_chars: 24000
     document:
       panel:
         deepseek:
@@ -155,6 +162,8 @@ fusion:
           max_tokens: 6144
         stage2:
           max_tokens: 6144
+        prompt_budget:
+          input_budget_chars: 32000
     general:
       panel:
         deepseek:
@@ -166,7 +175,8 @@ fusion:
       judge:
         stages: single
         max_panel_response_chars: 1800
-
+        prompt_budget:
+          input_budget_chars: 16000
   cleaning:
     profiles:
       coding:
@@ -209,7 +219,6 @@ fusion:
         strip_preamble: true
         min_words: 10
         dedup_threshold: 0.85
-
   api:
     primary:
       endpoint: "https://opencode.ai/zen/go/v1/chat/completions"
@@ -238,12 +247,10 @@ fusion:
       enabled: false
       provider: openrouter
       endpoint: "https://openrouter.ai/api/v1/chat/completions"
-
   pipeline:
     default_tier: medium
     max_panel_workers: 6
     min_survivors: 2
-    output_dir: ./fusion_output/
     soft_deadline_seconds: 300
     graceful_degradation: true
     express_qa:

@@ -3089,6 +3089,340 @@ class TestConfigSmokeFallbackRateLimit(unittest.TestCase):
             self.assertTrue(backoff["enabled"],
                             f"{path} backoff should be enabled by default")
 
+    def test_bundled_configs_have_prompt_budget_default(self):
+        """Both bundled configs have default.judge.prompt_budget with enabled: true."""
+        from scripts.config import load_config
+
+        for path in (
+            "skills/llm-fusion/assets/fusion_config.yaml",
+            "skills/llm-fusion/assets/fusion_config.yaml.example",
+        ):
+            cfg = load_config(path)
+            pb = cfg.get("default", {}).get("judge", {}).get("prompt_budget", {})
+            self.assertTrue(pb, f"{path} is missing default.judge.prompt_budget")
+            self.assertTrue(pb.get("enabled"), f"{path} prompt_budget.enabled should be true")
+
+    def test_bundled_configs_have_scenario_prompt_budget_keys(self):
+        """Scenarios with prompt_budget.input_budget_chars match between configs."""
+        from scripts.config import load_config
+
+        active = load_config("skills/llm-fusion/assets/fusion_config.yaml")
+        example = load_config("skills/llm-fusion/assets/fusion_config.yaml.example")
+
+        scenario_ids = ["bugfix", "qa", "plan_review", "reasoning", "document", "general"]
+        for sid in scenario_ids:
+            active_pb = active.get("scenarios", {}).get(sid, {}).get("judge", {}).get("prompt_budget", {})
+            example_pb = example.get("scenarios", {}).get(sid, {}).get("judge", {}).get("prompt_budget", {})
+            active_chars = active_pb.get("input_budget_chars")
+            example_chars = example_pb.get("input_budget_chars")
+            self.assertIsNotNone(active_chars,
+                                 f"{sid}: missing input_budget_chars in active config")
+            self.assertIsNotNone(example_chars,
+                                 f"{sid}: missing input_budget_chars in example config")
+            self.assertEqual(active_chars, example_chars,
+                             f"{sid}: input_budget_chars mismatch: {active_chars} != {example_chars}")
+
+
+class TestPromptBudget(unittest.TestCase):
+    """Test prompt-size budgeting helpers in judge.py."""
+
+    def test_chars_to_tokens_rough_ratio(self):
+        """_chars_to_tokens uses ~4 chars per token ratio."""
+        from scripts.judge import _chars_to_tokens
+        # 100 chars ~= 25 tokens
+        self.assertEqual(_chars_to_tokens(100), 25)
+        # 0 chars -> 1 token (floor)
+        self.assertEqual(_chars_to_tokens(""), 1)
+        # short string -> at least 1
+        self.assertEqual(_chars_to_tokens("a"), 1)
+        # 400 chars -> 100 tokens
+        self.assertEqual(_chars_to_tokens(400), 100)
+        # string input
+        self.assertEqual(_chars_to_tokens("hello world"), 2)  # 11 chars / 4 = 2
+
+    def test_resolve_prompt_budget_config_defaults(self):
+        """_resolve_prompt_budget_config returns sensible defaults."""
+        from scripts.judge import _resolve_prompt_budget_config
+        cfg = _resolve_prompt_budget_config(None)
+        self.assertTrue(cfg["enabled"])
+        self.assertGreater(cfg["max_input_tokens"], 1000)
+        self.assertGreater(cfg["model_context_window"], 1000)
+
+    def test_resolve_prompt_budget_config_with_judge_config(self):
+        """_resolve_prompt_budget_config reads from judge_config.prompt_budget."""
+        from scripts.judge import _resolve_prompt_budget_config
+        judge_cfg = {
+            "model": "mimo-v2.5",
+            "prompt_budget": {
+                "enabled": False,
+            }
+        }
+        cfg = _resolve_prompt_budget_config(judge_cfg)
+        self.assertFalse(cfg["enabled"])
+
+    def test_resolve_prompt_budget_config_custom_window(self):
+        """_resolve_prompt_budget_config accepts explicit model_context_window."""
+        from scripts.judge import _resolve_prompt_budget_config
+        judge_cfg = {
+            "model": "mimo-v2.5",
+            "prompt_budget": {
+                "model_context_window": 16000,
+            }
+        }
+        cfg = _resolve_prompt_budget_config(judge_cfg)
+        # max_input_tokens = 16000 - 4000 = 12000
+        self.assertEqual(cfg["model_context_window"], 16000)
+        self.assertEqual(cfg["max_input_tokens"], 12000)
+
+    def test_resolve_prompt_budget_config_explicit_max(self):
+        """_resolve_prompt_budget_config accepts explicit max_input_tokens."""
+        from scripts.judge import _resolve_prompt_budget_config
+        judge_cfg = {
+            "prompt_budget": {
+                "max_input_tokens": 8000,
+            }
+        }
+        cfg = _resolve_prompt_budget_config(judge_cfg)
+        self.assertEqual(cfg["max_input_tokens"], 8000)
+
+    def test_get_model_priority_weight(self):
+        """_get_model_priority_weight returns correct weights."""
+        from scripts.judge import _get_model_priority_weight
+        # deepseek-v4-pro is highest priority (5)
+        self.assertEqual(_get_model_priority_weight("deepseek-v4-pro"), 5)
+        # Unknown model gets 1
+        self.assertEqual(_get_model_priority_weight("unknown-model"), 1)
+        # mimo-v2.5 gets 2
+        self.assertEqual(_get_model_priority_weight("mimo-v2.5"), 2)
+        # deepseek-v4-flash gets 1 (lowest)
+        self.assertEqual(_get_model_priority_weight("deepseek-v4-flash"), 1)
+
+    def test_smart_trim_responses_within_budget(self):
+        """_smart_trim_responses does not trim when within budget."""
+        from scripts.judge import _smart_trim_responses
+        responses = [
+            {"label": "mimo-v2.5 #1", "model": "mimo-v2.5", "content": "Short response."},
+        ]
+        budget = {"enabled": True, "max_input_tokens": 100000}
+        trimmed, meta = _smart_trim_responses(responses, "query", "system", budget)
+        self.assertFalse(meta["prompt_budget_exceeded"])
+        self.assertEqual(len(trimmed), 1)
+        self.assertIn("Short response.", trimmed[0].get("content", ""))
+
+    def test_smart_trim_responses_trims_when_over_budget(self):
+        """_smart_trim_responses trims lower-priority responses when over budget."""
+        from scripts.judge import _smart_trim_responses
+        # Create long responses from different priority models
+        long_text = "x" * 10000
+        responses = [
+            {"label": "deepseek-v4-pro #1", "model": "deepseek-v4-pro", "content": long_text},
+            {"label": "deepseek-v4-flash #1", "model": "deepseek-v4-flash", "content": long_text},
+        ]
+        # tiny budget -> will need trimming
+        budget = {"enabled": True, "max_input_tokens": 50}
+        trimmed, meta = _smart_trim_responses(responses, "q", "s", budget)
+        self.assertTrue(meta["prompt_budget_exceeded"])
+        self.assertEqual(len(trimmed), 2)
+
+    def test_smart_trim_responses_disabled(self):
+        """_smart_trim_responses skips trimming when budget is disabled."""
+        from scripts.judge import _smart_trim_responses
+        long_text = "x" * 20000
+        responses = [
+            {"label": "mimo-v2.5 #1", "model": "mimo-v2.5", "content": long_text},
+        ]
+        budget = {"enabled": False, "max_input_tokens": 10}
+        trimmed, meta = _smart_trim_responses(responses, "q", "s", budget)
+        self.assertFalse(meta["prompt_budget_enabled"])
+        self.assertFalse(meta["prompt_budget_exceeded"])
+        # Content should be untouched because disabled
+        self.assertIn(long_text, trimmed[0].get("content", ""))
+
+    def test_smart_trim_responses_empty_responses(self):
+        """_smart_trim_responses handles empty response list gracefully."""
+        from scripts.judge import _smart_trim_responses
+        budget = {"enabled": True, "max_input_tokens": 500}
+        trimmed, meta = _smart_trim_responses([], "query", "system", budget)
+        self.assertEqual(trimmed, [])
+
+    def test_judge_single_stage_includes_budget_metadata(self):
+        """judge_single_stage result includes prompt budget fields."""
+        from scripts.judge import judge_single_stage
+        # Mock the API call to avoid real network calls
+        import scripts.judge as judge_module
+        original = judge_module.call_llm_with_retry
+        def _mock_call(**kwargs):
+            return {
+                "success": True,
+                "content": "Mocked answer",
+                "reasoning_content": None,
+                "usage": {"total_tokens": 10},
+                "error": None,
+            }
+        judge_module.call_llm_with_retry = _mock_call
+        try:
+            responses = [
+                {"label": "deepseek-v4-flash #1", "model": "deepseek-v4-flash",
+                 "cleaned_content": "Test response content."},
+            ]
+            judge_cfg = {
+                "model": "mimo-v2.5",
+                "prompt_budget": {"enabled": True},
+            }
+            result = judge_single_stage(
+                "test query", responses, "general",
+                config={"api": {"primary": {"endpoint": "http://test"}}},
+                judge_config=judge_cfg,
+            )
+            self.assertTrue(result["success"])
+            # Budget fields should be present
+            self.assertIn("prompt_budget_enabled", result)
+            self.assertIn("prompt_budget_exceeded", result)
+            self.assertIn("estimated_input_tokens_before", result)
+            self.assertIn("estimated_input_tokens_after", result)
+        finally:
+            judge_module.call_llm_with_retry = original
+
+    def test_judge_two_stage_includes_budget_metadata(self):
+        """judge_two_stage result includes prompt budget fields."""
+        from scripts.judge import judge_two_stage
+        import scripts.judge as judge_module
+        original = judge_module.call_llm_with_retry
+        call_count = [0]
+        def _mock_call(**kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return {
+                    "success": True,
+                    "content": "EVIDENCE_BUNDLE\nverdict: Test",
+                    "reasoning_content": None,
+                    "usage": {"total_tokens": 5},
+                    "error": None,
+                }
+            return {
+                "success": True,
+                "content": "Final answer",
+                "reasoning_content": None,
+                "usage": {"total_tokens": 5},
+                "error": None,
+            }
+        judge_module.call_llm_with_retry = _mock_call
+        try:
+            responses = [
+                {"label": "deepseek-v4-flash #1", "model": "deepseek-v4-flash",
+                 "cleaned_content": "Test content."},
+                {"label": "mimo-v2.5 #1", "model": "mimo-v2.5",
+                 "cleaned_content": "More content."},
+            ]
+            judge_cfg = {
+                "model": "mimo-v2.5",
+                "stages": "two",
+                "prompt_budget": {"enabled": True},
+                "stage1": {"max_tokens": 100},
+                "stage2": {"max_tokens": 100},
+            }
+            result = judge_two_stage(
+                "test query", responses, "bugfix",
+                config={"api": {"primary": {"endpoint": "http://test"}}},
+                judge_config=judge_cfg,
+            )
+            self.assertTrue(result["success"])
+            self.assertIn("prompt_budget_enabled", result)
+            self.assertIn("prompt_budget_exceeded", result)
+        finally:
+            judge_module.call_llm_with_retry = original
+
+    def test_two_stage_stage2_budget_compacts_stage1_content(self):
+        """Stage 2 budgets stage1_content when the stage 2 prompt exceeds budget."""
+        from scripts.judge import judge_two_stage
+        from unittest import mock
+
+        captured_prompts = []
+        call_count = [0]
+
+        def _fake_call(**kwargs):
+            call_count[0] += 1
+            prompt = kwargs.get("prompt", "")
+            captured_prompts.append(prompt)
+            if call_count[0] == 1:
+                return {"success": True, "content": "x" * 5000,
+                        "reasoning_content": None, "usage": {}, "error": None}
+            return {"success": True, "content": "Final answer",
+                    "reasoning_content": None, "usage": {}, "error": None}
+
+        responses = [
+            {"label": "A", "cleaned_content": "Short response"},
+        ]
+
+        with mock.patch("scripts.judge.call_llm_with_retry", side_effect=_fake_call):
+            result = judge_two_stage(
+                "test query", responses, "bugfix",
+                config={"api": {"primary": {"timeout": {"judge_floor": 2}}}},
+                judge_config={
+                    "model": "mimo-v2.5", "temp": 1.0, "top_p": 0.95,
+                    "max_tokens": 2048, "thinking": {"type": "enabled"},
+                    "stage1": {}, "stage2": {},
+                    "prompt_budget": {"enabled": True, "max_input_tokens": 10},
+                },
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(len(captured_prompts), 2)
+        # Stage 2 should have budgeting metadata
+        stage2 = result.get("stage2", {})
+        # Either budget_compacted or stage_content_compacted should reflect the compaction
+        self.assertIn("budget_compacted", stage2)
+
+    def test_resolve_prompt_budget_config_with_input_budget_chars(self):
+        """_resolve_prompt_budget_config accepts input_budget_chars."""
+        from scripts.judge import _resolve_prompt_budget_config
+        judge_cfg = {
+            "prompt_budget": {
+                "input_budget_chars": 10000,
+            }
+        }
+        cfg = _resolve_prompt_budget_config(judge_cfg)
+        self.assertEqual(cfg["input_budget_chars"], 10000)
+        # 10000 chars / 4 = 2500 tokens
+        self.assertEqual(cfg["max_input_tokens"], 2500)
+        self.assertTrue(cfg["enabled"])
+
+    def test_resolve_prompt_budget_config_input_budget_chars_floor(self):
+        """input_budget_chars less than 512 chars still floor at 512 tokens."""
+        from scripts.judge import _resolve_prompt_budget_config
+        judge_cfg = {
+            "prompt_budget": {
+                "input_budget_chars": 100,  # ~25 tokens, should floor to 512
+            }
+        }
+        cfg = _resolve_prompt_budget_config(judge_cfg)
+        self.assertEqual(cfg["input_budget_chars"], 100)
+        self.assertEqual(cfg["max_input_tokens"], 512)
+
+    def test_smart_trim_responses_metadata_includes_new_fields(self):
+        """_smart_trim_responses metadata includes new fields from the plan."""
+        from scripts.judge import _smart_trim_responses
+        responses = [
+            {"label": "A", "model": "deepseek-v4-flash", "content": "x" * 500},
+        ]
+        # Disabled budget
+        disabled_budget = {"enabled": False, "max_input_tokens": 50}
+        _, meta = _smart_trim_responses(responses, "q", "s", disabled_budget)
+        self.assertIn("prompt_budget_strategy", meta)
+        self.assertEqual(meta["prompt_budget_strategy"], "disabled")
+        self.assertIn("input_chars", meta)
+        self.assertIn("input_estimated_tokens", meta)
+
+        # Within budget
+        big_budget = {"enabled": True, "max_input_tokens": 100000}
+        _, meta2 = _smart_trim_responses(responses, "q", "s", big_budget)
+        self.assertEqual(meta2["prompt_budget_strategy"], "within_budget")
+        self.assertFalse(meta2["prompt_budget_warning"])
+        self.assertGreater(meta2["input_chars"], 0)
+        self.assertGreater(meta2["input_estimated_tokens"], 0)
+
+
+
 
 if __name__ == "__main__":
     unittest.main()
