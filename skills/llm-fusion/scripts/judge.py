@@ -657,7 +657,7 @@ def _derive_judge_timeout(judge_config, api_cfg):
     return min(timeout, max_timeout)
 
 
-def judge_single_stage(query, responses, scenario_id, config=None, judge_config=None, tier=None):
+def judge_single_stage(query, responses, scenario_id, config=None, judge_config=None, tier=None, deadline_timestamp=None):
     """Run a single-stage judge synthesis.
 
     Takes the original query and cleaned panel responses, builds a prompt
@@ -765,6 +765,7 @@ def judge_single_stage(query, responses, scenario_id, config=None, judge_config=
         retries=judge_retries,
         delays=judge_delays,
         config=config,
+        deadline_timestamp=deadline_timestamp,
         **judge_kwargs,
     )
 
@@ -778,7 +779,7 @@ def judge_single_stage(query, responses, scenario_id, config=None, judge_config=
     return result
 
 
-def judge_two_stage(query, responses, scenario_id, config=None, judge_config=None, tier=None):
+def judge_two_stage(query, responses, scenario_id, config=None, judge_config=None, tier=None, deadline_timestamp=None):
     """Run a two-stage judge (analysis then synthesis).
 
     Stage 1: Produce a structured analysis of all panel responses.
@@ -908,6 +909,7 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
         retries=judge_retries,
         delays=judge_delays,
         config=config,
+        deadline_timestamp=deadline_timestamp,
         **stage1_kwargs,
     )
 
@@ -1060,6 +1062,7 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
         retries=judge_retries,
         delays=judge_delays,
         config=config,
+        deadline_timestamp=deadline_timestamp,
         **stage2_kwargs,
     )
 

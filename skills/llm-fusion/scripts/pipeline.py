@@ -98,6 +98,9 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
     soft_deadline = pipeline_cfg.get("soft_deadline_seconds", 0)
     graceful = pipeline_cfg.get("graceful_degradation", True)
 
+    # Compute absolute deadline timestamp for deadline-aware retries
+    deadline_timestamp = (start + soft_deadline) if soft_deadline > 0 else None
+
     # Resolve output directory once. If the process is running from an
     # installed skill directory, skip saving entirely to avoid cluttering
     # ~/.hermes/skills/llm-fusion or similar skill install paths.
@@ -147,7 +150,7 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
             return _save(result)
         if verbose:
             print(f"[pipeline] Falling back to direct call", file=sys.stderr)
-        direct_result = _apply_direct_fallback(result, f"soft_deadline:{phase}", query, config)
+        direct_result = _apply_direct_fallback(result, f"soft_deadline:{phase}", query, config, deadline_timestamp=deadline_timestamp)
         if not direct_result.get("success"):
             result["error"] = f"Deadline exceeded during {phase}, fallback also failed"
             result["elapsed"] = elapsed
@@ -202,6 +205,7 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
             retries=1,
             delays=(2,),
             config=config,
+            deadline_timestamp=deadline_timestamp,
         )
         if direct["success"]:
             result["success"] = True
@@ -266,7 +270,8 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
     if verbose:
         print(f"[pipeline] Dispatching panel ({expected_calls} parallel calls, tier={normalized_tier})...")
     panel_result = dispatch_panel(query, scenario_id, config=config, tier=normalized_tier,
-                                  progress_callback=_panel_progress if verbose else None)
+                                  progress_callback=_panel_progress if verbose else None,
+                                  deadline_timestamp=deadline_timestamp)
     t_panel = time.monotonic() - t0
 
     deadline_check = _check_deadline("panel")
@@ -323,7 +328,7 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
         # Graceful degradation: try a direct LLM call
         if verbose:
             print("[pipeline] Graceful degradation: making direct LLM call...")
-        direct_result = _apply_direct_fallback(result, "panel_failure", query, config)
+        direct_result = _apply_direct_fallback(result, "panel_failure", query, config, deadline_timestamp=deadline_timestamp)
         if direct_result.get("success"):
             result["metadata"]["timing_ms"] = {
                 "classification": int(t_class * 1000),
@@ -364,7 +369,7 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
             return _save(result)
         if verbose:
             print(f"[pipeline] Not enough survivors ({survived}), using direct fallback...")
-        direct_result = _apply_direct_fallback(result, "insufficient_survivors", query, config)
+        direct_result = _apply_direct_fallback(result, "insufficient_survivors", query, config, deadline_timestamp=deadline_timestamp)
         if direct_result.get("success"):
             result["metadata"]["timing_ms"] = {
                 "classification": int(t_class * 1000),
@@ -393,12 +398,14 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
             query, cleaned_responses, scenario_id,
             config=config, judge_config=judge_config,
             tier=normalized_tier,
+            deadline_timestamp=deadline_timestamp,
         )
     else:
         judge_result = judge_single_stage(
             query, cleaned_responses, scenario_id,
             config=config, judge_config=judge_config,
             tier=normalized_tier,
+            deadline_timestamp=deadline_timestamp,
         )
     t_judge = time.monotonic() - t0
 
@@ -413,7 +420,7 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
             return _save(result)
         if verbose:
             print("[pipeline] Judge failed, using direct fallback...")
-        direct_result = _apply_direct_fallback(result, "judge_failure", query, config)
+        direct_result = _apply_direct_fallback(result, "judge_failure", query, config, deadline_timestamp=deadline_timestamp)
         if not direct_result.get("success"):
             result["error"] = "Judge and fallback both failed"
             result["elapsed"] = time.monotonic() - start
@@ -620,7 +627,7 @@ def _resolve_direct_fallback_config(config):
     return resolved
 
 
-def _direct_fallback(query, config):
+def _direct_fallback(query, config, deadline_timestamp=None):
     """Make a direct single LLM call as graceful degradation fallback.
 
     Uses config-driven settings from ``pipeline.direct_fallback``,
@@ -645,10 +652,11 @@ def _direct_fallback(query, config):
         retries=cfg["retries"],
         delays=cfg["delays_seconds"],
         config=config,
+        deadline_timestamp=deadline_timestamp,
     )
 
 
-def _apply_direct_fallback(result, reason, query, config):
+def _apply_direct_fallback(result, reason, query, config, deadline_timestamp=None):
     """Apply direct fallback to *result*, setting fallback metadata.
 
     Parameters
@@ -675,7 +683,7 @@ def _apply_direct_fallback(result, reason, query, config):
     fallback_model = fallback_cfg["model"]
 
     fb_start = time.monotonic()
-    direct_result = _direct_fallback(query, config)
+    direct_result = _direct_fallback(query, config, deadline_timestamp=deadline_timestamp)
     fb_elapsed = time.monotonic() - fb_start
 
     # Always set fallback metadata

@@ -5,7 +5,7 @@ license: MIT
 compatibility:
   - hermes-agent>=1.0.0
 metadata:
-  version: 0.2.13
+  version: 0.2.14
   tags: [llm, fusion, ensemble, ai, opencode]
   triggers:
     - pattern: /llm-fusion

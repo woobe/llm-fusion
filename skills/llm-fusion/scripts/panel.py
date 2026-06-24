@@ -181,7 +181,7 @@ def _resolve_panel_quorum(config, total_calls):
     return min(total_calls, min_survivors)
 
 
-def dispatch_panel(query, scenario_id, config=None, max_workers=None, tier=None, progress_callback=None):
+def dispatch_panel(query, scenario_id, config=None, max_workers=None, tier=None, progress_callback=None, deadline_timestamp=None):
     """Dispatch parallel panel calls for a given scenario.
 
     Parameters
@@ -321,6 +321,7 @@ def dispatch_panel(query, scenario_id, config=None, max_workers=None, tier=None,
                 retries=max_retries,
                 delays=delays,
                 config=config,
+                deadline_timestamp=deadline_timestamp,
             )
             return {
                 "label": spec["label"],

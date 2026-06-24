@@ -996,7 +996,7 @@ class TestPipeline(unittest.TestCase):
             },
         }
 
-        def _fake_fallback(query, cfg):
+        def _fake_fallback(*args, **kwargs):
             return {
                 "success": True,
                 "content": "fallback answer",
@@ -1038,7 +1038,7 @@ class TestPipeline(unittest.TestCase):
             "api": {"primary": {"timeout": {"judge_floor": 5}}},
         }
 
-        def _fake_fallback(query, cfg):
+        def _fake_fallback(*args, **kwargs):
             return {"success": False, "error": "boom", "elapsed": 0.05}
 
         with mock.patch("scripts.pipeline._direct_fallback", side_effect=_fake_fallback):
@@ -1084,7 +1084,7 @@ class TestPipeline(unittest.TestCase):
             },
         }
 
-        def _fake_fallback(query, cfg):
+        def _fake_fallback(*args, **kwargs):
             return {
                 "success": True,
                 "content": "fallback answer via panel failure",
@@ -1139,7 +1139,7 @@ class TestPipeline(unittest.TestCase):
             },
         }
 
-        def _fake_fallback(query, cfg):
+        def _fake_fallback(*args, **kwargs):
             return {"success": False, "error": "fallback failed", "content": None, "elapsed": 0.01}
 
         with mock.patch("scripts.pipeline.load_config", return_value=config), \
@@ -1202,7 +1202,7 @@ class TestPipeline(unittest.TestCase):
             },
         }
 
-        def _fake_fallback(query, cfg):
+        def _fake_fallback(*args, **kwargs):
             return {
                 "success": True,
                 "content": "judge fallback answer",
@@ -1270,7 +1270,7 @@ class TestPipeline(unittest.TestCase):
             },
         }
 
-        def _fake_fallback(query, cfg):
+        def _fake_fallback(*args, **kwargs):
             return {"success": True, "content": "deadline fallback", "reasoning_content": None, "elapsed": 0.01}
 
         with mock.patch("scripts.pipeline.load_config", return_value=config), \
@@ -2578,6 +2578,27 @@ class TestRetryHelpers(unittest.TestCase):
         )
         self.assertAlmostEqual(delay, 3.0, places=5)
 
+    def test_is_retryable_408(self):
+        """408 is retryable by default (request timeout)."""
+        from scripts.api_client import _is_retryable_result
+        self.assertTrue(_is_retryable_result(
+            {"success": False, "http_status": 408}
+        ))
+
+    def test_is_retryable_409(self):
+        """409 is retryable by default (conflict)."""
+        from scripts.api_client import _is_retryable_result
+        self.assertTrue(_is_retryable_result(
+            {"success": False, "http_status": 409}
+        ))
+
+    def test_is_retryable_425(self):
+        """425 is retryable by default (too early)."""
+        from scripts.api_client import _is_retryable_result
+        self.assertTrue(_is_retryable_result(
+            {"success": False, "http_status": 425}
+        ))
+
 
 class TestConfigResolvers(unittest.TestCase):
     """Test config resolver helpers."""
@@ -3013,6 +3034,163 @@ class TestStatusAwareRetry(unittest.TestCase):
         self.assertTrue(result.get("fallback_skipped"))
 
 
+class TestDeadlineAwareRetry(unittest.TestCase):
+    """Tests for deadline-aware retry stopping in call_llm_with_retry.
+
+    These tests mock call_llm and time.monotonic to verify deadline
+    behavior without real network or wall-clock delays.
+    """
+
+    def _make_config(self, retry_cfg=None):
+        config = {
+            "api": {
+                "primary": {
+                    "endpoint": "http://127.0.0.1:1/nonexistent",
+                    "timeout": {
+                        "panel_floor": 2,
+                        "judge_floor": 2,
+                        "panel_throughput": 9999,
+                        "judge_throughput": 9999,
+                        "overhead_seconds": 0,
+                        "max_timeout": 300,
+                    },
+                    "retry": {
+                        "max_retries": 2,
+                        "delays_seconds": [0.01, 0.02],
+                        "retryable_statuses": [429, 500, 502, 503, 504, 408, 409, 425],
+                        "non_retryable_statuses": [400, 401, 403, 404],
+                        "backoff": {"enabled": False},
+                    },
+                },
+            },
+        }
+        if retry_cfg:
+            config["api"]["primary"]["retry"].update(retry_cfg)
+        return config
+
+    def test_deadline_no_sleep_past_deadline(self):
+        """No sleep is called when the computed delay exceeds the deadline."""
+        from unittest import mock
+        from scripts.api_client import call_llm_with_retry
+
+        call_count = 0
+
+        def _fake_call(prompt, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return {"success": False, "http_status": 429, "error": "HTTP 429"}
+
+        config = self._make_config()
+        # Set deadline in the past so any retry delay would exceed it
+        deadline = time.monotonic() + 0.001  # 1ms from now
+        with mock.patch("scripts.api_client.call_llm", side_effect=_fake_call), \
+             mock.patch("scripts.api_client.time.sleep") as mock_sleep:
+            result = call_llm_with_retry(
+                "test", retries=3, delays=(0.01, 0.02), config=config,
+                deadline_timestamp=deadline,
+            )
+
+        # At most one attempt should start (the first), sleep should NOT be called
+        # because after the first 429 we check the deadline and stop
+        self.assertIn(call_count, (1, 2), "Expected at most 2 attempts before deadline stop")
+        mock_sleep.assert_not_called()
+        self.assertIn(
+            result.get("retry_stopped_reason"),
+            ("deadline_insufficient_budget", "deadline_exceeded"),
+        )
+
+    def test_deadline_no_attempt_after_expired(self):
+        """No attempt starts when deadline has already passed."""
+        from unittest import mock
+        from scripts.api_client import call_llm_with_retry
+
+        call_count = 0
+
+        def _fake_call(prompt, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return {"success": False, "http_status": 500, "error": "HTTP 500"}
+
+        config = self._make_config()
+        # Deadline in the past — no attempt should start
+        deadline = time.monotonic() - 1.0
+        with mock.patch("scripts.api_client.call_llm", side_effect=_fake_call), \
+             mock.patch("scripts.api_client.time.sleep"):
+            result = call_llm_with_retry(
+                "test", retries=3, delays=(0.01,), config=config,
+                deadline_timestamp=deadline,
+            )
+
+        self.assertEqual(call_count, 0, "No attempt should be made when deadline already passed")
+        self.assertEqual(result.get("retry_stopped_reason"), "deadline_exceeded")
+        self.assertEqual(result.get("error"), "Retry deadline exceeded before attempt")
+
+    def test_deadline_noop_when_not_set(self):
+        """Without deadline_timestamp, behavior is unchanged (backward-compat)."""
+        from unittest import mock
+        from scripts.api_client import call_llm_with_retry
+
+        call_count = 0
+
+        def _fake_call(prompt, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return {"success": False, "http_status": 429, "error": "HTTP 429"}
+            return {"success": True, "http_status": 200, "content": "ok"}
+
+        config = self._make_config()
+        with mock.patch("scripts.api_client.call_llm", side_effect=_fake_call), \
+             mock.patch("scripts.api_client.time.sleep"):
+            result = call_llm_with_retry(
+                "test", retries=2, delays=(0.01,), config=config,
+                # no deadline_timestamp
+            )
+
+        self.assertEqual(call_count, 2)
+        self.assertTrue(result["success"])
+        self.assertEqual(result.get("retry_stopped_reason"), "success")
+
+    def test_deadline_panel_propagation(self):
+        """dispatch_panel forwards deadline_timestamp to call_llm_with_retry."""
+        from unittest import mock
+        from scripts.panel import dispatch_panel
+
+        captured_kwargs = {}
+
+        def _fake_call_llm_with_retry(**kwargs):
+            captured_kwargs.update(kwargs)
+            return {"success": True, "content": "Mocked panel response", "http_status": 200, "elapsed": 0.01}
+
+        config = {
+            "api": {
+                "primary": {
+                    "endpoint": "http://127.0.0.1:1",
+                    "timeout": {"panel_floor": 2, "judge_floor": 2,
+                                "panel_throughput": 9999, "judge_throughput": 9999,
+                                "overhead_seconds": 0, "max_timeout": 300},
+                },
+            },
+            "pipeline": {
+                "max_panel_workers": 1,
+                "min_survivors": 1,
+            },
+        }
+
+        with mock.patch(
+            "scripts.panel.call_llm_with_retry",
+            side_effect=_fake_call_llm_with_retry,
+        ):
+            result = dispatch_panel(
+                "test query", "qa", config=config,
+                deadline_timestamp=42.0,
+            )
+
+        self.assertIn("deadline_timestamp", captured_kwargs,
+                      "deadline_timestamp should be forwarded to call_llm_with_retry")
+        self.assertEqual(captured_kwargs["deadline_timestamp"], 42.0)
+
+
 class TestConfigSmokeFallbackRateLimit(unittest.TestCase):
     """Verify the bundled configs contain the expected new keys."""
 
@@ -3065,7 +3243,7 @@ class TestConfigSmokeFallbackRateLimit(unittest.TestCase):
             retry = cfg.get("api", {}).get("primary", {}).get("retry", {})
             self.assertIn("retryable_statuses", retry, f"{path}")
             self.assertIn("non_retryable_statuses", retry, f"{path}")
-            self.assertEqual(set(retry["retryable_statuses"]), {429, 500, 502, 503, 504},
+            self.assertEqual(set(retry["retryable_statuses"]), {429, 500, 502, 503, 504, 408, 409, 425},
                              f"{path}")
             self.assertEqual(set(retry["non_retryable_statuses"]), {400, 401, 403, 404},
                              f"{path}")

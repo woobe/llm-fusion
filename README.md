@@ -267,7 +267,17 @@ user query
 
 ## Changelog
 
-### v0.2.13 (current)
+### v0.2.14 (current)
+- **Status-Aware + Deadline-Aware Retries** — retry only retryable failures, respect pipeline soft deadline
+  - New `_RETRYABLE_STATUSES` set: 408, 409, 425, 429, 5xx
+  - New `_NON_RETRYABLE_STATUSES` set: 400, 401, 403, 404
+  - `deadline_timestamp` parameter propagated through panel, judge, express QA, and direct fallback
+  - Exponential backoff with jitter for 429/5xx
+  - Config keys: `retry.retryable_statuses`, `retry.non_retryable_statuses`, `retry.backoff_base_seconds`, `retry.backoff_max_seconds`
+  - 10 new tests (7 deadline-aware + 3 status tests)
+  - 266 tests passing (was 259)
+
+### v0.2.13
 - **Prompt-Size Budgeting** — estimates input size before judge calls, trims by model priority + scenario boundaries
   - New `_apply_prompt_budget()` helper estimates total input before judge calls
   - New `_compact_sections()` performs section-compaction (not raw first-N chars)

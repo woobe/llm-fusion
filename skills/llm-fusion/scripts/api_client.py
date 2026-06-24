@@ -20,7 +20,7 @@ FALLBACK_ENDPOINT = "https://openrouter.ai/api/v1"
 USER_AGENT = "Hermes-Agent/1.0"
 
 # Default retryable/non-retryable HTTP status sets
-_RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
+_RETRYABLE_STATUSES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 _NON_RETRYABLE_STATUSES = frozenset({400, 401, 403, 404})
 
 
@@ -284,6 +284,64 @@ def _compute_retry_delay(attempt_index, delays, retry_policy, result,
         idx = min(attempt_index, len(delays) - 1)
         return float(delays[idx])
     return 1.0  # safe fallback
+
+
+# ---------------------------------------------------------------------------
+# Deadline helpers
+# ---------------------------------------------------------------------------
+
+
+def _deadline_remaining(deadline_timestamp):
+    """Return seconds remaining until *deadline_timestamp*, or ``None``.
+
+    Parameters
+    ----------
+    deadline_timestamp : float or None
+        Absolute ``time.monotonic()`` deadline.  ``None`` means no
+        deadline is active.
+
+    Returns
+    -------
+    float or None
+        ``max(0.0, deadline_timestamp - time.monotonic())``, or
+        ``None`` when *deadline_timestamp* is ``None``.
+    """
+    if deadline_timestamp is None:
+        return None
+    return max(0.0, deadline_timestamp - time.monotonic())
+
+
+def _deadline_allows_retry(deadline_timestamp, delay, buffer_seconds=0.25):
+    """Check whether there is enough time before the deadline for a retry.
+
+    Decision:
+    - No deadline (``None``) → always allows.
+    - Remaining time >= delay + buffer → allows.
+    - Otherwise → does not allow.
+
+    Parameters
+    ----------
+    deadline_timestamp : float or None
+        Absolute ``time.monotonic()`` deadline.
+    delay : float
+        The computed delay before the next attempt.
+    buffer_seconds : float
+        Safety buffer (default 0.25 seconds).
+
+    Returns
+    -------
+    (bool, float or None)
+        ``(allows, remaining)`` where *allows* is ``True`` when the
+        deadline allows the retry, and *remaining* is the seconds
+        remaining (0.0 if already past deadline) or ``None`` when no
+        deadline is set.
+    """
+    if deadline_timestamp is None:
+        return True, None
+    remaining = deadline_timestamp - time.monotonic()
+    if remaining <= 0.0:
+        return False, 0.0
+    return remaining >= (delay + buffer_seconds), max(0.0, remaining)
 
 
 # ---------------------------------------------------------------------------
@@ -650,6 +708,8 @@ def call_llm_with_retry(
     rate_limiter=None,
     fallback_config=None,
     retry_policy=None,
+    deadline_timestamp=None,
+    deadline_buffer_seconds=0.25,
     **kwargs,
 ):
     """Call ``call_llm`` with status-aware retry and optional provider fallback.
@@ -672,6 +732,15 @@ def call_llm_with_retry(
         Pre-resolved fallback config. When None, resolved from *config*.
     retry_policy : dict or None
         Pre-resolved retry policy. When None, resolved from *config*.
+    deadline_timestamp : float or None
+        Absolute ``time.monotonic()`` deadline.  When set, the function
+        will not start a new attempt if the deadline has passed, and
+        will not sleep for a retry delay that would exceed the deadline.
+        ``None`` means no deadline (backward-compatible default).
+    deadline_buffer_seconds : float
+        Safety buffer (default 0.25 s) added when checking whether a
+        retry delay fits within the remaining deadline time.  Only
+        meaningful when *deadline_timestamp* is set.
     **kwargs
         Forwarded to ``call_llm``.
 
@@ -679,7 +748,8 @@ def call_llm_with_retry(
     -------
     dict with the same shape as :func:`call_llm`, plus optional
     observability keys ``attempts``, ``retry_stopped_reason``,
-    ``from_fallback``, ``fallback_provider``, and ``fallback_error``.
+    ``from_fallback``, ``fallback_provider``, ``fallback_error``,
+    ``retry_deadline_remaining_seconds``, and ``retry_next_delay_seconds``.
     Never raises.
     """
     # Resolve config-based policies
@@ -696,6 +766,27 @@ def call_llm_with_retry(
     last_result = None
 
     for attempt in range(effective_retries + 1):
+        # --- Deadline check before attempt ---
+        if deadline_timestamp is not None:
+            remaining = deadline_timestamp - time.monotonic()
+            if remaining <= 0.0:
+                # Deadline already passed — do not start this attempt
+                if last_result is not None:
+                    last_result["retry_stopped_reason"] = "deadline_exceeded"
+                    last_result["retry_deadline_remaining_seconds"] = 0.0
+                else:
+                    # No prior result — return an explicit failure
+                    return {
+                        "success": False,
+                        "error": "Retry deadline exceeded before attempt",
+                        "http_status": None,
+                        "elapsed": 0.0,
+                        "attempts": attempt + 1,
+                        "retry_stopped_reason": "deadline_exceeded",
+                        "retry_deadline_remaining_seconds": 0.0,
+                    }
+                break
+
         result = call_llm(
             prompt,
             config=config,
@@ -727,6 +818,16 @@ def call_llm_with_retry(
                 resolved_retry_policy,
                 result,
             )
+            # --- Deadline check before sleep ---
+            if deadline_timestamp is not None:
+                allows, remaining = _deadline_allows_retry(
+                    deadline_timestamp, delay, deadline_buffer_seconds,
+                )
+                if not allows:
+                    last_result["retry_stopped_reason"] = "deadline_insufficient_budget"
+                    last_result["retry_deadline_remaining_seconds"] = remaining
+                    last_result["retry_next_delay_seconds"] = delay
+                    break
             time.sleep(delay)
         else:
             last_result["retry_stopped_reason"] = "attempts_exhausted"
