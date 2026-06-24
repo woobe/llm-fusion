@@ -250,6 +250,14 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
                 f"({event['label']} {status}{extra})",
                 file=sys.stderr, flush=True,
             )
+        elif phase == "panel_quorum_reached":
+            print(
+                f"[llm-fusion] Panel quorum reached: "
+                f"{event.get('successful', '?')}/{event.get('total', '?')} successful "
+                f"in {event.get('elapsed_ms', '?')}ms; "
+                f"cancelled {event.get('cancelled_count', 0)} pending call(s)",
+                file=sys.stderr, flush=True,
+            )
 
     t0 = time.monotonic()
     # Count expected parallel calls from scenario models
@@ -270,6 +278,13 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
         "models_succeeded": sum(
             1 for r in panel_result.get("responses", []) if r.get("success")
         ),
+        "models_submitted": panel_result.get("total_calls", expected_calls),
+        "quorum": panel_result.get("quorum"),
+        "quorum_reached": panel_result.get("quorum_reached", False),
+        "quorum_at_ms": panel_result.get("quorum_at_ms"),
+        "cancelled_count": panel_result.get("cancelled_count", 0),
+        "late_completed_count": panel_result.get("late_completed_count", 0),
+        "panel_calls_early_exit": panel_result.get("panel_calls_early_exit", False),
     }
     result["metadata"]["panel"].update(panel_metrics)
 

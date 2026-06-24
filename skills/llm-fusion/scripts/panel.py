@@ -150,6 +150,37 @@ def _build_call_specs(models_list, user_prompt, config):
     return call_specs
 
 
+def _resolve_panel_quorum(config, total_calls):
+    """Compute panel quorum from ``pipeline.min_survivors``, clamped to total_calls.
+
+    Quorum is the number of successful panel responses needed to early-exit.
+    Returns 0 when *total_calls* is 0 (no quorum needed — existing failure
+    behavior applies). Never raises.
+
+    Parameters
+    ----------
+    config : dict or None
+        Full fusion config dict (may be None or empty).
+    total_calls : int
+        Number of submitted panel call specs.
+
+    Returns
+    -------
+    int
+        Quorum threshold, clamped to ``[0, total_calls]``.
+    """
+    if not isinstance(total_calls, int) or total_calls <= 0:
+        return 0
+    if not config or not isinstance(config, dict):
+        min_survivors = 2
+    else:
+        min_survivors = config.get("pipeline", {}).get("min_survivors", 2)
+    if not isinstance(min_survivors, (int, float)) or min_survivors < 0:
+        min_survivors = 2
+    min_survivors = int(min_survivors)
+    return min(total_calls, min_survivors)
+
+
 def dispatch_panel(query, scenario_id, config=None, max_workers=None, tier=None, progress_callback=None):
     """Dispatch parallel panel calls for a given scenario.
 
@@ -195,6 +226,13 @@ def dispatch_panel(query, scenario_id, config=None, max_workers=None, tier=None,
         "responses": [],
         "config_used": {},
         "elapsed": 0.0,
+        "total_calls": 0,
+        "quorum": 0,
+        "quorum_reached": False,
+        "quorum_at_ms": None,
+        "cancelled_count": 0,
+        "late_completed_count": 0,
+        "panel_calls_early_exit": False,
     }
 
     if config is None:
@@ -266,8 +304,6 @@ def dispatch_panel(query, scenario_id, config=None, max_workers=None, tier=None,
             pass
 
     # Execute calls in parallel via ThreadPoolExecutor
-    futures = {}
-
     def _do_call(spec):
         """Execute a single panel call."""
         try:
@@ -308,14 +344,25 @@ def dispatch_panel(query, scenario_id, config=None, max_workers=None, tier=None,
                 "elapsed": 0,
             }
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    total = len(call_specs)
+    quorum = _resolve_panel_quorum(config, total)
+    result["total_calls"] = total
+    result["quorum"] = quorum
+
+    executor = ThreadPoolExecutor(max_workers=max_workers)
+    futures = {}
+    collected_futures = set()
+    completed = 0
+    success_count = 0
+    early_exit = False
+
+    try:
         for spec in call_specs:
             future = executor.submit(_do_call, spec)
             futures[future] = spec["label"]
 
-        total = len(call_specs)
-        completed = 0
         for future in as_completed(futures):
+            collected_futures.add(future)
             try:
                 response = future.result()
                 result["responses"].append(response)
@@ -333,6 +380,8 @@ def dispatch_panel(query, scenario_id, config=None, max_workers=None, tier=None,
                 }
                 result["responses"].append(response)
             completed += 1
+            if response.get("success"):
+                success_count += 1
             if progress_callback:
                 try:
                     progress_callback({
@@ -346,6 +395,43 @@ def dispatch_panel(query, scenario_id, config=None, max_workers=None, tier=None,
                     })
                 except Exception:
                     pass  # callback must never raise
+
+            # Check quorum for early exit
+            if success_count >= quorum and quorum > 0:
+                early_exit = True
+                result["quorum_reached"] = True
+                result["quorum_at_ms"] = int((time.monotonic() - start) * 1000)
+                result["panel_calls_early_exit"] = True
+                break
+    finally:
+        if early_exit:
+            # Cancel pending futures (queued but not yet started)
+            for f in futures:
+                if not f.done() and f.cancel():
+                    result["cancelled_count"] += 1
+            # Shutdown without blocking on in-flight calls
+            executor.shutdown(wait=False)
+            # Best-effort count of late completions
+            # Only count futures that completed after break (not cancelled ones)
+            for f in futures:
+                if f not in collected_futures and f.done() and not f.cancelled():
+                    result["late_completed_count"] += 1
+            # Emit quorum-reached progress event
+            if progress_callback:
+                try:
+                    progress_callback({
+                        "phase": "panel_quorum_reached",
+                        "completed": completed,
+                        "successful": success_count,
+                        "total": total,
+                        "quorum": quorum,
+                        "elapsed_ms": result["quorum_at_ms"],
+                        "cancelled_count": result["cancelled_count"],
+                    })
+                except Exception:
+                    pass
+        else:
+            executor.shutdown()  # wait=True — existing behavior
 
     # Sort responses by label for consistent ordering
     result["responses"].sort(key=lambda r: r.get("label", ""))

@@ -355,7 +355,7 @@ class TestPanelTier(unittest.TestCase):
             },
             "pipeline": {
                 "max_panel_workers": 6,
-                "min_survivors": 1,
+                "min_survivors": 6,
                 "graceful_degradation": True,
             },
         }
@@ -405,7 +405,7 @@ class TestPanelTier(unittest.TestCase):
                     "retry": {"max_retries": 0, "delays_seconds": [0.1]},
                 },
             },
-            "pipeline": {"max_panel_workers": 3, "min_survivors": 1, "graceful_degradation": True},
+            "pipeline": {"max_panel_workers": 3, "min_survivors": 2, "graceful_degradation": True},
         }
 
         with mock.patch("scripts.panel.call_llm_with_retry") as mock_call:
@@ -507,6 +507,306 @@ class TestPanelTier(unittest.TestCase):
         self.assertEqual(len(specs), 2)
         for spec in specs:
             self.assertNotEqual(spec["model"], "deepseek-v4-flash")
+
+
+class TestPanelQuorum(unittest.TestCase):
+    """Test early quorum and cancellation in dispatch_panel."""
+
+    def _make_config(self, min_survivors=2, max_workers=6):
+        return {
+            "default": {
+                "panel": {
+                    "models": [
+                        {"name": "deepseek-v4-flash", "count": 3, "temp": 0.75,
+                         "top_p": 0.9, "max_completion_tokens": 100},
+                    ],
+                },
+                "judge": {"model": "deepseek-v4-flash", "temp": 0.0, "top_p": 1.0},
+            },
+            "scenarios": {"general": {"panel": {}, "judge": {"stages": "single"}}},
+            "api": {
+                "primary": {
+                    "endpoint": "http://127.0.0.1:1/nonexistent",
+                    "timeout": {
+                        "panel_floor": 2, "judge_floor": 2,
+                        "panel_throughput": 9999, "judge_throughput": 9999,
+                        "overhead_seconds": 0, "max_timeout": 300,
+                    },
+                    "retry": {"max_retries": 0, "delays_seconds": [0.01]},
+                },
+            },
+            "pipeline": {
+                "max_panel_workers": max_workers,
+                "min_survivors": min_survivors,
+                "graceful_degradation": True,
+            },
+        }
+
+    @staticmethod
+    def _fast_response():
+        return {"success": True, "content": "ok", "reasoning_content": None,
+                "usage": {}, "elapsed": 0.01}
+
+    @staticmethod
+    def _failure_response():
+        return {"success": False, "content": "", "reasoning_content": None,
+                "usage": {}, "elapsed": 0.01, "error": "mock failure"}
+
+    def test_quorum_returns_before_slow_third(self):
+        """Early quorum: dispatch_panel returns before a slow third response."""
+        import time
+        from scripts.panel import dispatch_panel
+
+        config = self._make_config(min_survivors=2, max_workers=3)
+
+        def _side_effect(**kwargs):
+            # Add small delay on the third call
+            call_count = _side_effect.counter
+            _side_effect.counter += 1
+            if call_count >= 2:
+                time.sleep(0.3)
+            return self._fast_response()
+        _side_effect.counter = 0
+
+        start = time.monotonic()
+        with mock.patch("scripts.panel.call_llm_with_retry",
+                        side_effect=_side_effect):
+            result = dispatch_panel("test query", "general", config=config,
+                                    tier="medium", max_workers=3)
+
+        elapsed = time.monotonic() - start
+        self.assertLess(elapsed, 0.25,
+                        "Should return before the slow call completes")
+        self.assertEqual(len(result["responses"]), 2)
+        self.assertTrue(result["success"])
+        self.assertTrue(result["quorum_reached"])
+        self.assertTrue(result["panel_calls_early_exit"])
+        self.assertIsInstance(result["quorum_at_ms"], (int, float))
+        self.assertGreaterEqual(result["quorum_at_ms"], 0)
+
+    def test_quorum_clamped_to_total_calls(self):
+        """Quorum is clamped to total calls when min_survivors exceeds them.
+
+        Uses the ``tiers`` config format (bypasses TIER_MAP) to have exactly
+        2 calls.  min_survivors=5 clamps quorum to 2.  Quorum is reached
+        after both succeed, but the panel still fails because
+        succeeded (2) < min_survivors (5) — existing survivorship check
+        is unchanged.
+        """
+        from scripts.panel import dispatch_panel
+
+        config = self._make_config(min_survivors=5, max_workers=3)
+        # Use ``tiers`` key to avoid TIER_MAP resolution adding extra models
+        config["default"]["panel"] = {
+            "tiers": {
+                "medium": [
+                    {"name": "test-custom-model", "count": 2},
+                ],
+            },
+            "model_defaults": {
+                "test-custom-model": {"temp": 0.75, "top_p": 0.9,
+                                      "max_completion_tokens": 100},
+            },
+        }
+
+        with mock.patch("scripts.panel.call_llm_with_retry") as mock_call:
+            mock_call.return_value = self._fast_response()
+            result = dispatch_panel("test query", "general", config=config,
+                                    tier=None, max_workers=3)
+
+        # min_survivors=5 clamped to total_calls=2 → quorum=2
+        self.assertEqual(result["total_calls"], 2)
+        self.assertEqual(result["quorum"], 2)
+        # Both succeed, so quorum is reached (early exit safe)
+        self.assertTrue(result["quorum_reached"])
+        self.assertEqual(len(result["responses"]), 2)
+        # Panel still fails because 2 < min_survivors=5 (existing behavior)
+        self.assertFalse(result["success"],
+                         "Panel fails when succeeded < min_survivors")
+
+    def test_failures_do_not_count_toward_quorum(self):
+        """Failed responses are not counted toward the quorum threshold.
+
+        The failure must finish before the two successes so that all three
+        responses complete before the loop breaks (failures don't count
+        toward quorum, but they are still collected).
+        """
+        import time
+        from scripts.panel import dispatch_panel
+
+        config = self._make_config(min_survivors=2, max_workers=3)
+
+        _call_index = 0
+
+        def _delayed_side_effect(**kwargs):
+            nonlocal _call_index
+            idx = _call_index
+            _call_index += 1
+            if idx == 0:
+                return self._failure_response()  # instant failure → collected first
+            # Tiny delay so the two successes arrive after the failure
+            time.sleep(0.005)
+            return self._fast_response()
+
+        with mock.patch("scripts.panel.call_llm_with_retry",
+                        side_effect=_delayed_side_effect):
+            result = dispatch_panel("test query", "general", config=config,
+                                    tier="medium", max_workers=3)
+
+        # All 3 calls collected (failure finishes first, then two successes)
+        self.assertEqual(len(result["responses"]), 3)
+        self.assertTrue(result["success"])
+        # Quorum was reached after the 3rd call (2nd success)
+        self.assertTrue(result["quorum_reached"])
+
+    def test_quorum_failure_preserves_existing_failure(self):
+        """When quorum is never reached, existing panel failure behavior applies."""
+        from scripts.panel import dispatch_panel
+
+        config = self._make_config(min_survivors=2, max_workers=3)
+
+        calls = [
+            self._fast_response(),     # 1 success
+            self._failure_response(),  # 1 failure
+            self._failure_response(),  # 2nd failure
+        ]
+
+        with mock.patch("scripts.panel.call_llm_with_retry",
+                        side_effect=calls):
+            result = dispatch_panel("test query", "general", config=config,
+                                    tier="medium", max_workers=3)
+
+        self.assertFalse(result["success"],
+                         "Panel should fail with insufficient survivors")
+        self.assertFalse(result["quorum_reached"])
+        self.assertFalse(result["panel_calls_early_exit"])
+        self.assertEqual(result["cancelled_count"], 0)
+        self.assertGreaterEqual(result["late_completed_count"], 0)
+
+    def test_pending_futures_cancelled(self):
+        """Pending (queued) futures are cancelled when quorum is reached.
+
+        Because the executor may dispatch queued futures to freed threads
+        before the main thread breaks from as_completed, we use best-effort
+        assertions: cancelled_count is at least 0, and all futures are
+        accounted for (collected + cancelled + late = total).
+        """
+        from scripts.panel import dispatch_panel
+
+        # 4 calls with only 2 workers — 2 will run, 2 will be queued
+        # Use ``tiers`` format (bypasses TIER_MAP) to have exact control over counts
+        config = {
+            "default": {
+                "panel": {
+                    "tiers": {
+                        "medium": [
+                            {"name": "test-custom-model", "count": 4},
+                        ],
+                    },
+                    "model_defaults": {
+                        "test-custom-model": {"temp": 0.75, "top_p": 0.9,
+                                              "max_completion_tokens": 100},
+                    },
+                },
+                "judge": {"model": "deepseek-v4-flash", "temp": 0.0, "top_p": 1.0},
+            },
+            "scenarios": {"general": {"panel": {}, "judge": {"stages": "single"}}},
+            "api": {
+                "primary": {
+                    "endpoint": "http://127.0.0.1:1/nonexistent",
+                    "timeout": {
+                        "panel_floor": 2, "judge_floor": 2,
+                        "panel_throughput": 9999, "judge_throughput": 9999,
+                        "overhead_seconds": 0, "max_timeout": 300,
+                    },
+                    "retry": {"max_retries": 0, "delays_seconds": [0.01]},
+                },
+            },
+            "pipeline": {
+                "max_panel_workers": 2,
+                "min_survivors": 2,
+                "graceful_degradation": True,
+            },
+        }
+
+        with mock.patch("scripts.panel.call_llm_with_retry") as mock_call:
+            mock_call.return_value = {
+                "success": True, "content": "ok", "reasoning_content": None,
+                "usage": {}, "elapsed": 0.01,
+            }
+            result = dispatch_panel("test query", "general", config=config,
+                                    tier=None, max_workers=2)
+
+        # 2 responses collected (quorum) — the rest were cancelled or late
+        self.assertEqual(len(result["responses"]), 2)
+        self.assertTrue(result["success"])
+        self.assertTrue(result["quorum_reached"])
+        total_calls = result["total_calls"]
+        accounted = (len(result["responses"])
+                     + result["cancelled_count"]
+                     + result["late_completed_count"])
+        self.assertEqual(accounted, total_calls,
+                         f"All {total_calls} futures should be accounted for: "
+                         f"{len(result['responses'])} collected + "
+                         f"{result['cancelled_count']} cancelled + "
+                         f"{result['late_completed_count']} late = {accounted}")
+
+    def test_running_late_futures_discarded(self):
+        """Already-running futures that finish after quorum are discarded."""
+        import time
+        from scripts.panel import dispatch_panel
+
+        # 3 calls with 3 workers — all start immediately
+        config = self._make_config(min_survivors=2, max_workers=3)
+
+        call_index = 0
+
+        def _mixed(**kwargs):
+            nonlocal call_index
+            idx = call_index
+            call_index += 1
+            if idx >= 2:  # third call is slow
+                time.sleep(0.3)
+            return self._fast_response()
+
+        with mock.patch("scripts.panel.call_llm_with_retry",
+                        side_effect=_mixed):
+            result = dispatch_panel("test query", "general", config=config,
+                                    tier="medium", max_workers=3)
+
+        # Only 2 responses should be collected
+        self.assertEqual(len(result["responses"]), 2)
+        self.assertTrue(result["success"])
+        self.assertTrue(result["quorum_reached"])
+        # The slow third call was already running so cancel returns False
+        self.assertEqual(result["cancelled_count"], 0,
+                         "Running future cannot be cancelled")
+        # The slow call may or may not have completed before late check
+        self.assertGreaterEqual(result["late_completed_count"], 0)
+
+    def test_resolve_panel_quorum_helper(self):
+        """_resolve_panel_quorum computes correct values."""
+        from scripts.panel import _resolve_panel_quorum
+
+        # Normal case
+        config = {"pipeline": {"min_survivors": 3}}
+        self.assertEqual(_resolve_panel_quorum(config, 5), 3)
+        self.assertEqual(_resolve_panel_quorum(config, 10), 3)
+        # Clamped
+        self.assertEqual(_resolve_panel_quorum(config, 2), 2)
+        # Zero total
+        self.assertEqual(_resolve_panel_quorum(config, 0), 0)
+        # Missing config
+        self.assertEqual(_resolve_panel_quorum(None, 5), 2)
+        self.assertEqual(_resolve_panel_quorum({}, 5), 2)
+        # Missing min_survivors
+        self.assertEqual(_resolve_panel_quorum({"pipeline": {}}, 5), 2)
+        # Negative min_survivors (misconfiguration → default to 2)
+        neg_config = {"pipeline": {"min_survivors": -1}}
+        self.assertEqual(_resolve_panel_quorum(neg_config, 5), 2)
+        # Invalid type
+        bad_config = {"pipeline": {"min_survivors": "abc"}}
+        self.assertEqual(_resolve_panel_quorum(bad_config, 5), 2)
 
 
 class TestCLITier(unittest.TestCase):

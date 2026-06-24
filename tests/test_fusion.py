@@ -1315,6 +1315,88 @@ class TestPipeline(unittest.TestCase):
                 f"{path} direct_fallback keys mismatch: expected {expected_keys}, got {set(fb.keys())}",
             )
 
+    def test_pipeline_metadata_includes_quorum_fields(self):
+        """Pipeline metadata includes early quorum fields when panel provides them."""
+        from unittest import mock
+        from scripts.pipeline import run_pipeline
+
+        config = {
+            "default": {
+                "panel": {
+                    "models": [
+                        {"name": "deepseek-v4-flash", "count": 1, "temp": 0.75,
+                         "top_p": 0.9, "max_completion_tokens": 100},
+                    ],
+                },
+                "judge": {"model": "deepseek-v4-flash", "temp": 0.0, "top_p": 1.0},
+            },
+            "scenarios": {"general": {}},
+            "cleaning": {"profiles": {"general": {}}},
+            "api": {
+                "primary": {
+                    "endpoint": "http://127.0.0.1:1/nonexistent",
+                    "timeout": {"panel_floor": 2, "judge_floor": 2,
+                                "panel_throughput": 9999, "judge_throughput": 9999,
+                                "overhead_seconds": 0, "max_timeout": 300},
+                    "retry": {"max_retries": 0, "delays_seconds": []},
+                },
+            },
+            "pipeline": {
+                "soft_deadline_seconds": 0,
+                "max_panel_workers": 1,
+                "min_survivors": 2,
+                "graceful_degradation": False,
+            },
+        }
+
+        panel_result = {
+            "success": True,
+            "responses": [
+                {"label": "model #1", "success": True, "content": "a",
+                 "reasoning_content": None, "usage": {}, "elapsed": 0.01},
+                {"label": "model #2", "success": True, "content": "b",
+                 "reasoning_content": None, "usage": {}, "elapsed": 0.01},
+            ],
+            "config_used": {},
+            "elapsed": 0.05,
+            "total_calls": 3,
+            "quorum": 2,
+            "quorum_reached": True,
+            "quorum_at_ms": 123,
+            "cancelled_count": 1,
+            "late_completed_count": 0,
+            "panel_calls_early_exit": True,
+        }
+
+        with mock.patch("scripts.pipeline.load_config", return_value=config), \
+             mock.patch("scripts.pipeline.dispatch_panel",
+                        return_value=panel_result), \
+             mock.patch("scripts.pipeline.clean_panel_responses") as mock_clean, \
+             mock.patch("scripts.pipeline.judge_single_stage") as mock_judge:
+            mock_clean.return_value = {
+                "cleaned_responses": [
+                    {"label": "model #1", "cleaned_content": "a"},
+                    {"label": "model #2", "cleaned_content": "b"},
+                ],
+                "survived_count": 2,
+                "discarded_count": 0,
+            }
+            mock_judge.return_value = {
+                "success": True, "content": "final answer",
+                "reasoning_content": None, "usage": {}, "elapsed": 0.02,
+            }
+            result = run_pipeline("test query")
+
+        self.assertTrue(result["success"])
+        panel_meta = result["metadata"]["panel"]
+        self.assertEqual(panel_meta["models_submitted"], 3)
+        self.assertEqual(panel_meta["quorum"], 2)
+        self.assertTrue(panel_meta["quorum_reached"])
+        self.assertEqual(panel_meta["quorum_at_ms"], 123)
+        self.assertEqual(panel_meta["cancelled_count"], 1)
+        self.assertEqual(panel_meta["late_completed_count"], 0)
+        self.assertTrue(panel_meta["panel_calls_early_exit"])
+
 
 class TestJudge(unittest.TestCase):
     """Test llm_fusion/judge.py"""

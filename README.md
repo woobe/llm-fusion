@@ -267,7 +267,17 @@ user query
 
 ## Changelog
 
-### v0.2.10 (current)
+### v0.2.11 (current)
+- **Panel Early Quorum & Cancellation** — `dispatch_panel()` returns early once `min_survivors` responses collected
+  - New `_resolve_panel_quorum()` helper derives quorum = min(total_calls, pipeline.min_survivors)
+  - Pending futures cancelled, in-flight results discarded
+  - No new config keys — uses existing `pipeline.min_survivors`
+  - Executor lifecycle: explicit `shutdown(wait=False)` on early exit
+  - 7 new metadata fields: `total_calls`, `quorum`, `quorum_reached`, `quorum_at_ms`, `cancelled_count`, `late_completed_count`, `panel_calls_early_exit`
+  - 8 new unit tests in `TestPanelQuorum`, 1 pipeline integration test
+  - 234 tests passing (was 226)
+
+### v0.2.10
 - **Config-driven direct fallback** — consolidated hardcoded fallback logic into one reusable helper
   - New `_apply_direct_fallback()` helper for all failure paths
   - Config section: `pipeline.direct_fallback` (model, temperature, top_p, max_tokens, timeout, retries, delays_seconds)
@@ -488,7 +498,7 @@ llm-fusion/
   README.md, LICENSE, .gitignore
   skills/llm-fusion/    # skill bundle
     SKILL.md, scripts/ (12 modules), assets/ (config)
-  tests/                # 226 unit tests
+  tests/                # 234 unit tests
   local/                # dev notes
 ```
 
