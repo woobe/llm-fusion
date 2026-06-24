@@ -5,6 +5,13 @@
 fusion:
   version: "2.0.0"
 
+  classification:
+    enabled: false
+    confidence_threshold: 0.85
+    llm_model: deepseek-v4-flash
+    llm_temp: 0.0
+    llm_max_tokens: 100
+
   default:
     panel:
       models:

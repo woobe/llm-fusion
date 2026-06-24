@@ -456,6 +456,63 @@ class TestClassifier(unittest.TestCase):
         expected = {"coding", "bugfix", "qa", "plan_review", "creative", "reasoning", "document", "general"}
         self.assertEqual(set(CONCISENESS_SUFFIXES.keys()), expected)
 
+    def test_classify_default_disabled_no_llm_call(self):
+        """classification.enabled defaults to false; LLM classifier not called with empty classification config."""
+        from unittest import mock
+        from scripts.classifier import classify_query
+
+        with mock.patch("scripts.classifier._llm_classifier") as mock_llm:
+            result = classify_query(
+                "Tell me something interesting",
+                {"classification": {}},
+            )
+        self.assertEqual(result["scenario"], "general")
+        self.assertEqual(result["detection_method"], "regex")
+        mock_llm.assert_not_called()
+
+    def test_classify_explicit_disabled_no_llm_call(self):
+        """classification.enabled: false explicitly; LLM classifier not called."""
+        from unittest import mock
+        from scripts.classifier import classify_query
+
+        with mock.patch("scripts.classifier._llm_classifier") as mock_llm:
+            result = classify_query(
+                "Tell me something interesting",
+                {"classification": {"enabled": False, "confidence_threshold": 0.85}},
+            )
+        self.assertEqual(result["scenario"], "general")
+        self.assertEqual(result["detection_method"], "regex")
+        mock_llm.assert_not_called()
+
+    def test_classify_enabled_calls_llm_for_low_confidence(self):
+        """classification.enabled: true triggers LLM classifier for low-confidence general fallback."""
+        from unittest import mock
+        from scripts.classifier import classify_query
+
+        mock_result = {"scenario": "creative", "confidence": 0.9, "reason": "mock"}
+        with mock.patch("scripts.classifier._llm_classifier", return_value=mock_result) as mock_llm:
+            result = classify_query(
+                "Tell me something interesting",
+                {"classification": {"enabled": True, "confidence_threshold": 0.85}},
+            )
+        mock_llm.assert_called_once()
+        self.assertEqual(result["detection_method"], "llm")
+        self.assertEqual(result["scenario"], "creative")
+
+    def test_classify_high_confidence_bypasses_llm_even_when_enabled(self):
+        """High-confidence regex match bypasses LLM even when classification.enabled is true."""
+        from unittest import mock
+        from scripts.classifier import classify_query
+
+        with mock.patch("scripts.classifier._llm_classifier") as mock_llm:
+            result = classify_query(
+                "Write a Python function that sorts a list",
+                {"classification": {"enabled": True, "confidence_threshold": 0.85}},
+            )
+        self.assertEqual(result["scenario"], "coding")
+        self.assertEqual(result["detection_method"], "regex")
+        mock_llm.assert_not_called()
+
 
 class TestCleaner(unittest.TestCase):
     """Test llm_fusion/cleaner.py"""

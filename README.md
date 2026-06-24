@@ -509,6 +509,28 @@ PYTHONPATH=skills/llm-fusion python3 -m scripts --query "What is 2+2?"
 - Never commit `.env` files or API keys
 - Config examples use placeholders, never real secrets
 
+---
+
+## Changelog
+
+### v0.2.9 (2026-06-24)
+
+- **Classifier optimization**: Added `classification.enabled: false` config flag
+  - LLM second-pass classifier now opt-in only (default: disabled)
+  - Saves 1 API call per general query
+  - Backward compatible: existing configs default to `enabled: false`
+- 4 new unit tests added (disabled, missing-key, enabled, high-confidence bypass)
+- 100 tests passing
+
+### v0.2.8 (2026-06-23)
+
+- Default tier changed from low2 → medium
+- Judge model swap from DeepSeek → Mimo v2.5
+- Token budget and timeout tuning
+- Optimization recommendations saved to `local/optimization_recommendations.md`
+
+---
+
 ## License
 
 MIT

@@ -42,7 +42,7 @@ def get_skill_manifest():
     """Return the skill manifest."""
     return {
         "name": "llm-fusion",
-        "version": "0.2.8",
+        "version": "0.2.9",
         "description": "Multi-scenario fusion pipeline with tier-based panel dispatch (low1/low2/low3/medium/high) using deepseek-v4-flash, mimo-v2.5, minimax-m3, deepseek-v4-pro, and qwen3.7-plus",
         "author": "snr-dev",
         "triggers": [

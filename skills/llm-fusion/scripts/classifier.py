@@ -175,7 +175,8 @@ def classify_query(query, config=None):
     Stage 1: Regex/keyword pre-classifier.
     If confidence is >= threshold (default 0.85) or no config is provided,
     returns the pre-classifier result directly (fast path).
-    If confidence < threshold, triggers LLM second pass (Stage 2).
+    If confidence < threshold and config has `classification.enabled: true`,
+    triggers LLM second pass (Stage 2). Otherwise returns the regex result.
 
     Parameters
     ----------
@@ -263,13 +264,15 @@ def classify_query(query, config=None):
             "reason": "no specific scenario matched, fallback to general",
         }
 
-    # --- Stage 2: LLM second pass (if enabled and confidence low) ---
+    # --- Stage 2: LLM second pass (only when classification.enabled is true) ---
+    llm_enabled = False
     threshold = 0.85
     if config and isinstance(config, dict):
         cls_config = config.get("classification", {})
+        llm_enabled = bool(cls_config.get("enabled", False))
         threshold = cls_config.get("confidence_threshold", 0.85)
 
-    if best_match["confidence"] < threshold and config:
+    if llm_enabled and best_match["confidence"] < threshold:
         llm_result = _llm_classifier(query, config)
         if llm_result:
             best_match = llm_result
