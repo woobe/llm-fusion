@@ -332,6 +332,21 @@ def dispatch_panel(query, scenario_id, config=None, max_workers=None, tier=None,
                 "error": resp.get("error"),
                 "usage": resp.get("usage"),
                 "elapsed": resp.get("elapsed", 0),
+                "attempt_count": resp.get("attempt_count", 1),
+                "retryable": resp.get("retryable", False),
+                "final_http_status": resp.get("final_http_status"),
+                "http_status": resp.get("http_status"),
+                "error_category": resp.get("error_category"),
+                "retry_stopped_reason": resp.get("retry_stopped_reason"),
+                "input_chars": resp.get("input_chars", 0),
+                "output_chars": resp.get("output_chars", 0),
+                "reasoning_output_chars": resp.get("reasoning_output_chars", 0),
+                "input_tokens": resp.get("input_tokens"),
+                "output_tokens": resp.get("output_tokens"),
+                "total_tokens": resp.get("total_tokens"),
+                "from_fallback": resp.get("from_fallback"),
+                "fallback_provider": resp.get("fallback_provider"),
+                "fallback_error": resp.get("fallback_error"),
             }
         except Exception as exc:
             return {
@@ -343,6 +358,21 @@ def dispatch_panel(query, scenario_id, config=None, max_workers=None, tier=None,
                 "error": f"Panel dispatch exception: {exc}",
                 "usage": None,
                 "elapsed": 0,
+                "attempt_count": 0,
+                "retryable": False,
+                "final_http_status": None,
+                "http_status": None,
+                "error_category": "unknown_error",
+                "retry_stopped_reason": None,
+                "input_chars": 0,
+                "output_chars": 0,
+                "reasoning_output_chars": 0,
+                "input_tokens": None,
+                "output_tokens": None,
+                "total_tokens": None,
+                "from_fallback": None,
+                "fallback_provider": None,
+                "fallback_error": None,
             }
 
     total = len(call_specs)
@@ -438,6 +468,35 @@ def dispatch_panel(query, scenario_id, config=None, max_workers=None, tier=None,
     result["responses"].sort(key=lambda r: r.get("label", ""))
 
     result["elapsed"] = time.monotonic() - start
+
+    # --- Aggregates ---
+    responses = result.get("responses", [])
+    result["attempt_count_total"] = sum(
+        r.get("attempt_count", 1 if r.get("success") else 0) for r in responses
+    )
+    result["retryable_error_count"] = sum(
+        1 for r in responses if r.get("retryable") and not r.get("success")
+    )
+    error_categories = {}
+    http_statuses = {}
+    usage_totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    for r in responses:
+        cat = r.get("error_category")
+        if cat:
+            error_categories[cat] = error_categories.get(cat, 0) + 1
+        hs = r.get("http_status")
+        hs_key = str(hs) if hs is not None else "none"
+        http_statuses[hs_key] = http_statuses.get(hs_key, 0) + 1
+        for tok_key in ("input_tokens", "output_tokens", "total_tokens"):
+            val = r.get(tok_key)
+            if val is not None:
+                try:
+                    usage_totals[tok_key] += int(val)
+                except (ValueError, TypeError):
+                    pass
+    result["error_categories"] = error_categories if error_categories else None
+    result["http_statuses"] = http_statuses if http_statuses else None
+    result["usage_totals"] = usage_totals
 
     # Check if enough responses survived
     succeeded = sum(1 for r in result["responses"] if r.get("success"))

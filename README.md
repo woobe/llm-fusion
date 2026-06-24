@@ -267,7 +267,17 @@ user query
 
 ## Changelog
 
-### v0.2.14 (current)
+### v0.2.15 (current)
+- **Structured Error Categories + Observability** — typed error objects, per-call metadata, safe observability hooks
+  - New `_categorize_error()` helper: auth_error, rate_limited, timeout, bad_request, network_error, empty_response
+  - New `_build_call_metadata()` for structured per-call info
+  - Per-call fields: `error_category`, `attempt_count`, `retryable`, `final_http_status`
+  - Token counters: `prompt_tokens`, `completion_tokens` when available
+  - No secrets, raw prompts, or request payloads in output
+  - 29 new tests covering error categorization, metadata, and backward compatibility
+  - 295 tests passing (was 266)
+
+### v0.2.14
 - **Status-Aware + Deadline-Aware Retries** — retry only retryable failures, respect pipeline soft deadline
   - New `_RETRYABLE_STATUSES` set: 408, 409, 425, 429, 5xx
   - New `_NON_RETRYABLE_STATUSES` set: 400, 401, 403, 404

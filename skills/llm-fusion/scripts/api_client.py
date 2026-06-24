@@ -345,6 +345,226 @@ def _deadline_allows_retry(deadline_timestamp, delay, buffer_seconds=0.25):
 
 
 # ---------------------------------------------------------------------------
+# Observability helpers
+# ---------------------------------------------------------------------------
+
+
+def _categorize_error(error=None, http_status=None,
+                      retry_stopped_reason=None):
+    """Categorize an error into a compact vocabulary.
+
+    Decision order:
+    1. If ``http_status`` is set and success (2xx), return ``None``.
+    2. If ``http_status`` is set, use the HTTP status code.
+    3. If ``retry_stopped_reason`` contains ``deadline``, return
+       ``"timeout"``.
+    4. If ``error`` text matches key patterns, derive category from text.
+    5. If ``http_status`` is ``None`` (transport failure), return
+       ``"network_error"``.
+    6. Otherwise return ``None`` (no error).
+
+    Parameters
+    ----------
+    error : str or None
+        The error string from a result dict.
+    http_status : int or None
+        HTTP status code.
+    retry_stopped_reason : str or None
+        Retry stop reason (e.g. ``"deadline_exceeded"``).
+
+    Returns
+    -------
+    str or None
+        Category from the vocabulary, or ``None`` when there is no error
+        (success path).
+    """
+    if http_status is not None:
+        if 200 <= http_status <= 299:
+            return None  # success - no error
+        if http_status in (401, 403):
+            return "auth_error"
+        if http_status == 429:
+            return "rate_limited"
+        if http_status in (408, 409, 425):
+            return "conflict_retryable"
+        if http_status in (400, 404):
+            return "bad_request"
+        if 500 <= http_status <= 599:
+            return "server_error"
+        if 400 <= http_status <= 499:
+            return "bad_request"
+        return None
+
+    # No HTTP status - derive from error text or stop reason
+    if retry_stopped_reason and "deadline" in retry_stopped_reason:
+        return "timeout"
+
+    if error:
+        err_lower = error.lower()
+        if "timeout" in err_lower or "timed out" in err_lower:
+            return "timeout"
+        if "json decode" in err_lower or "parse" in err_lower:
+            return "parse_error"
+        if "no api key" in err_lower or "api key" in err_lower:
+            return "config_error"
+        if "auth" in err_lower or "unauthorized" in err_lower:
+            return "auth_error"
+        return "unknown_error"
+
+    # http_status is None with no error text - transport / network failure
+    return "network_error"
+
+
+
+def _normalize_usage_counters(usage):
+    """Normalize usage dict to canonical ``input_tokens``, ``output_tokens``,
+    ``total_tokens`` keys.
+
+    Accepts OpenAI-style keys (``prompt_tokens``, ``completion_tokens``,
+    ``total_tokens``) and provider-style keys (``input_tokens``,
+    ``output_tokens``).  Never raises on malformed input.
+
+    Returns
+    -------
+    dict with keys ``input_tokens``, ``output_tokens``, ``total_tokens``.
+    Each value is ``int`` or ``None``.
+    """
+    result = {
+        "input_tokens": None,
+        "output_tokens": None,
+        "total_tokens": None,
+    }
+
+    if not usage or not isinstance(usage, dict):
+        return result
+
+    # input / prompt tokens
+    input_t = usage.get("input_tokens") or usage.get("prompt_tokens")
+    if input_t is not None:
+        try:
+            result["input_tokens"] = int(input_t)
+        except (ValueError, TypeError):
+            pass
+
+    # output / completion tokens
+    output_t = usage.get("output_tokens") or usage.get("completion_tokens")
+    if output_t is not None:
+        try:
+            result["output_tokens"] = int(output_t)
+        except (ValueError, TypeError):
+            pass
+
+    # total tokens (use explicit or compute)
+    total_t = usage.get("total_tokens")
+    if total_t is not None:
+        try:
+            result["total_tokens"] = int(total_t)
+        except (ValueError, TypeError):
+            pass
+
+    if result["total_tokens"] is None:
+        if result["input_tokens"] is not None and result["output_tokens"] is not None:
+            try:
+                result["total_tokens"] = result["input_tokens"] + result["output_tokens"]
+            except TypeError:
+                pass
+
+    return result
+
+
+def _attach_call_observability(result, prompt=None, system_prompt=None,
+                               retry_policy=None):
+    """Attach safe observability fields to *result* dict in-place.
+
+    Adds the following fields if not already set:
+    - ``error_category``
+    - ``attempt_count`` (default 1)
+    - ``retryable``
+    - ``final_http_status``
+    - ``prompt_chars``, ``system_prompt_chars``, ``input_chars``
+    - ``output_chars``, ``reasoning_output_chars``
+    - ``input_tokens``, ``output_tokens``, ``total_tokens``
+    - ``attempts`` (if not already present and attempt_count is set)
+
+    Uses the result's existing ``error``, ``http_status``,
+    ``retry_stopped_reason`` fields plus the optional char-based input
+    arguments.
+
+    Never raises and never mutates existing fields that are already of
+    the correct type.
+    """
+    # --- error_category ---
+    if "error_category" not in result:
+        result["error_category"] = _categorize_error(
+            error=result.get("error"),
+            http_status=result.get("http_status"),
+            retry_stopped_reason=result.get("retry_stopped_reason"),
+        )
+
+    # --- attempt_count ---
+    if "attempt_count" not in result:
+        # If attempts is already set (from retry wrapper), use it;
+        # otherwise default to 1 for a single call.
+        result["attempt_count"] = result.get("attempts", 1)
+
+    # --- retryable ---
+    if "retryable" not in result:
+        if result.get("success"):
+            result["retryable"] = False
+        else:
+            from scripts.api_client import _is_retryable_result
+            result["retryable"] = _is_retryable_result(
+                result,
+                retryable_statuses=(
+                    (retry_policy or {}).get("retryable_statuses")
+                ) if retry_policy else None,
+                non_retryable_statuses=(
+                    (retry_policy or {}).get("non_retryable_statuses")
+                ) if retry_policy else None,
+            )
+        # Override retryable for non-retryable error categories
+        # (config errors, auth errors, bad requests, parse errors)
+        cat = result.get("error_category")
+        if cat in ("config_error", "auth_error", "bad_request",
+                   "parse_error", "empty_response"):
+            result["retryable"] = False
+
+    # --- final_http_status ---
+    if "final_http_status" not in result:
+        result["final_http_status"] = result.get("http_status")
+
+    # --- Char counters ---
+    prompt_text = prompt or ""
+    system_text = system_prompt or ""
+    output_text = result.get("content") or ""
+    reasoning_text = result.get("reasoning_content") or ""
+
+    result["prompt_chars"] = len(prompt_text)
+    result["system_prompt_chars"] = len(system_text)
+    result["input_chars"] = len(prompt_text) + len(system_text)
+    result["output_chars"] = len(output_text)
+    result["reasoning_output_chars"] = len(reasoning_text)
+
+    # --- Normalized token counters ---
+    usage = result.get("usage")
+    if usage and isinstance(usage, dict):
+        normalized = _normalize_usage_counters(usage)
+        for key in ("input_tokens", "output_tokens", "total_tokens"):
+            if key not in result:
+                result[key] = normalized[key]
+    else:
+        for key in ("input_tokens", "output_tokens", "total_tokens"):
+            if key not in result:
+                result[key] = None
+
+    # --- Backward-compatible attempts alias ---
+    if "attempts" not in result and "attempt_count" in result:
+        result["attempts"] = result["attempt_count"]
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Provider fallback attempt
 # ---------------------------------------------------------------------------
 
@@ -384,6 +604,12 @@ def _attempt_provider_fallback(prompt, fallback_config, **kwargs):
         "error": None,
         "http_status": None,
         "elapsed": 0.0,
+        "attempt_count": 1,
+        "prompt_chars": 0,
+        "system_prompt_chars": 0,
+        "input_chars": 0,
+        "output_chars": 0,
+        "reasoning_output_chars": 0,
         "from_fallback": True,
         "fallback_provider": fallback_config.get("provider", "openrouter"),
     }
@@ -406,6 +632,7 @@ def _attempt_provider_fallback(prompt, fallback_config, **kwargs):
         if not api_key:
             result["error"] = "No API key for fallback"
             result["elapsed"] = time.monotonic() - start
+            _attach_call_observability(result, prompt=prompt)
             return result
 
         headers = {
@@ -463,6 +690,7 @@ def _attempt_provider_fallback(prompt, fallback_config, **kwargs):
 
         if error or http_status is None or http_status >= 400:
             result["error"] = error or f"HTTP {http_status}"
+            _attach_call_observability(result, prompt=prompt)
             return result
 
         parsed = json.loads(raw_body)  # type: ignore[arg-type]
@@ -483,6 +711,7 @@ def _attempt_provider_fallback(prompt, fallback_config, **kwargs):
         result["error"] = f"Fallback exception: {exc}"
 
     result["elapsed"] = time.monotonic() - start
+    _attach_call_observability(result, prompt=prompt)
     return result
 
 
@@ -580,6 +809,12 @@ def call_llm(
         "error": None,
         "http_status": None,
         "elapsed": 0.0,
+        "attempt_count": 1,
+        "prompt_chars": 0,
+        "system_prompt_chars": 0,
+        "input_chars": 0,
+        "output_chars": 0,
+        "reasoning_output_chars": 0,
     }
 
     # Resolve API key
@@ -591,6 +826,8 @@ def call_llm(
             "or ensure ~/.hermes/.env exists."
         )
         result["elapsed"] = time.monotonic() - start
+        _attach_call_observability(result, prompt=prompt,
+                                   system_prompt=system_prompt)
         return result
 
     # Resolve endpoint
@@ -662,6 +899,8 @@ def call_llm(
         elapsed = time.monotonic() - start
         result["elapsed"] = elapsed
         result["error"] = f"Unexpected transport error: {exc}"
+        _attach_call_observability(result, prompt=prompt,
+                                   system_prompt=system_prompt)
         return result
 
     elapsed = time.monotonic() - start
@@ -670,6 +909,8 @@ def call_llm(
 
     if error or http_status is None or http_status >= 400:
         result["error"] = error or f"HTTP {http_status}"
+        _attach_call_observability(result, prompt=prompt,
+                                   system_prompt=system_prompt)
         return result
 
     # Parse JSON body
@@ -692,6 +933,8 @@ def call_llm(
     except json.JSONDecodeError as exc:
         result["error"] = f"JSON decode error: {exc}"
 
+    _attach_call_observability(result, prompt=prompt,
+                               system_prompt=system_prompt)
     return result
 
 
@@ -776,15 +1019,18 @@ def call_llm_with_retry(
                     last_result["retry_deadline_remaining_seconds"] = 0.0
                 else:
                     # No prior result — return an explicit failure
-                    return {
+                    result = {
                         "success": False,
                         "error": "Retry deadline exceeded before attempt",
                         "http_status": None,
                         "elapsed": 0.0,
                         "attempts": attempt + 1,
+                        "attempt_count": attempt + 1,
                         "retry_stopped_reason": "deadline_exceeded",
                         "retry_deadline_remaining_seconds": 0.0,
                     }
+                    _attach_call_observability(result)
+                    return result
                 break
 
         result = call_llm(
@@ -793,7 +1039,13 @@ def call_llm_with_retry(
             rate_limiter=rate_limiter,
             **kwargs,
         )
+        # Ensure observability fields are set with retry-policy awareness
+        _attach_call_observability(
+            result, prompt=prompt,
+            retry_policy=resolved_retry_policy,
+        )
         result["attempts"] = attempt + 1
+        result["attempt_count"] = attempt + 1
         last_result = result
 
         if result.get("success"):
@@ -851,15 +1103,37 @@ def call_llm_with_retry(
                 **kwargs,
             )
             if fb_result.get("success"):
+                _attach_call_observability(
+                    fb_result, prompt=prompt,
+                )
                 return fb_result
             # Attach fallback error to primary result
             if last_result is not None:
                 last_result["fallback_error"] = fb_result.get("error")
                 last_result["retry_stopped_reason"] = "fallback_failed"
 
-    return last_result if last_result is not None else {
+    if last_result is not None:
+        _attach_call_observability(
+            last_result, prompt=prompt,
+            retry_policy=resolved_retry_policy,
+        )
+        return last_result
+
+    return {
         "success": False,
         "error": "No result from call_llm_with_retry",
         "http_status": None,
         "elapsed": 0.0,
+        "attempt_count": 0,
+        "retryable": False,
+        "error_category": "unknown_error",
+        "final_http_status": None,
+        "prompt_chars": 0,
+        "system_prompt_chars": 0,
+        "input_chars": 0,
+        "output_chars": 0,
+        "reasoning_output_chars": 0,
+        "input_tokens": None,
+        "output_tokens": None,
+        "total_tokens": None,
     }

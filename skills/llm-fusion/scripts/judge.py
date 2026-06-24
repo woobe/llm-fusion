@@ -775,6 +775,14 @@ def judge_single_stage(query, responses, scenario_id, config=None, judge_config=
     result["usage"] = llm_result.get("usage")
     result["error"] = llm_result.get("error")
     result["elapsed"] = time.monotonic() - start
+    # Propagate safe observability fields
+    for _key in ("error_category", "attempt_count", "retryable",
+                  "final_http_status", "http_status",
+                  "retry_stopped_reason",
+                  "input_chars", "output_chars", "reasoning_output_chars",
+                  "input_tokens", "output_tokens", "total_tokens"):
+        if _key in llm_result:
+            result[_key] = llm_result[_key]
 
     return result
 
@@ -925,7 +933,18 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
         "usage": stage1_result.get("usage"),
         "error": stage1_result.get("error"),
         "elapsed": stage1_elapsed,
+        "error_category": stage1_result.get("error_category"),
+        "attempt_count": stage1_result.get("attempt_count", 0),
+        "retryable": stage1_result.get("retryable", False),
+        "final_http_status": stage1_result.get("final_http_status"),
+        "http_status": stage1_result.get("http_status"),
+        "retry_stopped_reason": stage1_result.get("retry_stopped_reason"),
         "input_chars": result.get("stage1_input_chars", 0),
+        "output_chars": stage1_result.get("output_chars", 0),
+        "reasoning_output_chars": stage1_result.get("reasoning_output_chars", 0),
+        "input_tokens": stage1_result.get("input_tokens"),
+        "output_tokens": stage1_result.get("output_tokens"),
+        "total_tokens": stage1_result.get("total_tokens"),
         "input_estimated_tokens": result.get("estimated_input_tokens_after", 0),
         "budget_compacted": result.get("prompt_budget_exceeded", False),
         "budget_warning": result.get("prompt_budget_warning", False),
@@ -1078,7 +1097,18 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
         "usage": stage2_result.get("usage"),
         "error": stage2_result.get("error"),
         "elapsed": total_elapsed - stage1_elapsed,
+        "error_category": stage2_result.get("error_category"),
+        "attempt_count": stage2_result.get("attempt_count", 0),
+        "retryable": stage2_result.get("retryable", False),
+        "final_http_status": stage2_result.get("final_http_status"),
+        "http_status": stage2_result.get("http_status"),
+        "retry_stopped_reason": stage2_result.get("retry_stopped_reason"),
         "input_chars": result.get("stage2_input_chars", 0),
+        "output_chars": stage2_result.get("output_chars", 0),
+        "reasoning_output_chars": stage2_result.get("reasoning_output_chars", 0),
+        "input_tokens": stage2_result.get("input_tokens"),
+        "output_tokens": stage2_result.get("output_tokens"),
+        "total_tokens": stage2_result.get("total_tokens"),
         "input_estimated_tokens": max(1, int(result.get("stage2_input_chars", 0) / 4)),
     }
     # Preserve budget metadata added before the stage 2 call

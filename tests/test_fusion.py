@@ -9,6 +9,7 @@ import sys
 import json
 import time
 import unittest
+from unittest import mock
 import tempfile
 
 import scripts
@@ -3598,6 +3599,587 @@ class TestPromptBudget(unittest.TestCase):
         self.assertFalse(meta2["prompt_budget_warning"])
         self.assertGreater(meta2["input_chars"], 0)
         self.assertGreater(meta2["input_estimated_tokens"], 0)
+
+
+
+
+class TestObservability(unittest.TestCase):
+    """Test structured error categories and observability fields."""
+
+    # ------------------------------------------------------------------
+    # _categorize_error
+    # ------------------------------------------------------------------
+
+    def test_categorize_error_401(self):
+        from scripts.api_client import _categorize_error
+        self.assertEqual(_categorize_error(http_status=401), "auth_error")
+
+    def test_categorize_error_403(self):
+        from scripts.api_client import _categorize_error
+        self.assertEqual(_categorize_error(http_status=403), "auth_error")
+
+    def test_categorize_error_429(self):
+        from scripts.api_client import _categorize_error
+        self.assertEqual(_categorize_error(http_status=429), "rate_limited")
+
+    def test_categorize_error_408(self):
+        from scripts.api_client import _categorize_error
+        self.assertEqual(_categorize_error(http_status=408), "conflict_retryable")
+
+    def test_categorize_error_409(self):
+        from scripts.api_client import _categorize_error
+        self.assertEqual(_categorize_error(http_status=409), "conflict_retryable")
+
+    def test_categorize_error_425(self):
+        from scripts.api_client import _categorize_error
+        self.assertEqual(_categorize_error(http_status=425), "conflict_retryable")
+
+    def test_categorize_error_5xx(self):
+        from scripts.api_client import _categorize_error
+        for code in (500, 502, 503, 504):
+            self.assertEqual(_categorize_error(http_status=code), "server_error")
+
+    def test_categorize_error_400(self):
+        from scripts.api_client import _categorize_error
+        self.assertEqual(_categorize_error(http_status=400), "bad_request")
+
+    def test_categorize_error_404(self):
+        from scripts.api_client import _categorize_error
+        self.assertEqual(_categorize_error(http_status=404), "bad_request")
+
+    def test_categorize_error_timeout_text(self):
+        from scripts.api_client import _categorize_error
+        self.assertEqual(
+            _categorize_error(error="Request timed out"), "timeout"
+        )
+
+    def test_categorize_error_json_decode(self):
+        from scripts.api_client import _categorize_error
+        self.assertEqual(
+            _categorize_error(error="JSON decode error: unexpected"), "parse_error"
+        )
+
+    def test_categorize_error_no_api_key(self):
+        from scripts.api_client import _categorize_error
+        self.assertEqual(
+            _categorize_error(error="No API key found"), "config_error"
+        )
+
+    def test_categorize_error_transport_failure(self):
+        from scripts.api_client import _categorize_error
+        self.assertEqual(
+            _categorize_error(http_status=None), "network_error"
+        )
+
+    def test_categorize_error_deadline_reason(self):
+        from scripts.api_client import _categorize_error
+        self.assertEqual(
+            _categorize_error(retry_stopped_reason="deadline_exceeded"),
+            "timeout",
+        )
+
+    def test_categorize_error_no_context_returns_network_error(self):
+        from scripts.api_client import _categorize_error
+        # No HTTP status, no error text -> network_error (transport failure)
+        self.assertEqual(_categorize_error(), "network_error")
+
+    # ------------------------------------------------------------------
+    # _normalize_usage_counters
+    # ------------------------------------------------------------------
+
+    def test_normalize_usage_openai_style(self):
+        from scripts.api_client import _normalize_usage_counters
+        result = _normalize_usage_counters({
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "total_tokens": 150,
+        })
+        self.assertEqual(result["input_tokens"], 100)
+        self.assertEqual(result["output_tokens"], 50)
+        self.assertEqual(result["total_tokens"], 150)
+
+    def test_normalize_usage_provider_style(self):
+        from scripts.api_client import _normalize_usage_counters
+        result = _normalize_usage_counters({
+            "input_tokens": 200,
+            "output_tokens": 80,
+        })
+        self.assertEqual(result["input_tokens"], 200)
+        self.assertEqual(result["output_tokens"], 80)
+        self.assertEqual(result["total_tokens"], 280)
+
+    def test_normalize_usage_none(self):
+        from scripts.api_client import _normalize_usage_counters
+        result = _normalize_usage_counters(None)
+        self.assertIsNone(result["input_tokens"])
+        self.assertIsNone(result["output_tokens"])
+        self.assertIsNone(result["total_tokens"])
+
+    def test_normalize_usage_empty(self):
+        from scripts.api_client import _normalize_usage_counters
+        result = _normalize_usage_counters({})
+        self.assertIsNone(result["input_tokens"])
+        self.assertIsNone(result["output_tokens"])
+        self.assertIsNone(result["total_tokens"])
+
+    def test_normalize_usage_malformed(self):
+        from scripts.api_client import _normalize_usage_counters
+        result = _normalize_usage_counters("not a dict")
+        self.assertIsNone(result["input_tokens"])
+
+    # ------------------------------------------------------------------
+    # call_llm - missing API key
+    # ------------------------------------------------------------------
+
+    def test_call_llm_no_api_key_observability(self):
+        from scripts.api_client import call_llm
+        with mock.patch("scripts.api_client.read_api_key", return_value=None):
+            result = call_llm("test prompt", system_prompt="sys")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_category"], "config_error")
+        self.assertEqual(result["attempt_count"], 1)
+        self.assertFalse(result["retryable"])
+        self.assertIsNone(result["final_http_status"])
+        self.assertIsNone(result["http_status"])
+        self.assertGreater(result["prompt_chars"], 0)
+        self.assertGreater(result["system_prompt_chars"], 0)
+        self.assertGreater(result["input_chars"], 0)
+        self.assertEqual(result["output_chars"], 0)
+        self.assertIsNone(result["input_tokens"])
+        self.assertIsNone(result["output_tokens"])
+        self.assertIsNone(result["total_tokens"])
+
+    # ------------------------------------------------------------------
+    # call_llm - success
+    # ------------------------------------------------------------------
+
+    def test_call_llm_success_observability(self):
+        from scripts.api_client import call_llm
+        mock_response = json.dumps({
+            "choices": [{"message": {"content": "Hello world", "reasoning_content": "thinking"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }).encode()
+
+        with mock.patch.multiple(
+            "scripts.api_client",
+            read_api_key=mock.DEFAULT,
+        ) as mocks:
+            mocks["read_api_key"].return_value = "test-key"
+            with mock.patch(
+                "scripts.fallback.rate_limited_request",
+                return_value=(200, mock_response, None),
+            ):
+                result = call_llm(
+                    "test prompt",
+                    system_prompt="sys prompt",
+                    config={"api": {"primary": {"endpoint": "http://example.com"}}},
+                )
+        self.assertTrue(result["success"])
+        self.assertIsNone(result["error_category"])
+        self.assertEqual(result["attempt_count"], 1)
+        self.assertFalse(result["retryable"])
+        self.assertEqual(result["final_http_status"], 200)
+        self.assertEqual(result["http_status"], 200)
+        self.assertEqual(result["prompt_chars"], len("test prompt"))
+        self.assertEqual(result["system_prompt_chars"], len("sys prompt"))
+        self.assertEqual(result["input_chars"], len("test prompt") + len("sys prompt"))
+        self.assertEqual(result["output_chars"], len("Hello world"))
+        self.assertEqual(result["reasoning_output_chars"], len("thinking"))
+        self.assertEqual(result["input_tokens"], 10)
+        self.assertEqual(result["output_tokens"], 5)
+        self.assertEqual(result["total_tokens"], 15)
+
+    # ------------------------------------------------------------------
+    # call_llm_with_retry - retry observability
+    # ------------------------------------------------------------------
+
+    def _make_retry_config(self):
+        return {
+            "api": {
+                "primary": {
+                    "endpoint": "http://127.0.0.1:1/nonexistent",
+                    "timeout": {
+                        "panel_floor": 2, "judge_floor": 2,
+                        "panel_throughput": 9999, "judge_throughput": 9999,
+                        "overhead_seconds": 0, "max_timeout": 300,
+                    },
+                    "retry": {
+                        "max_retries": 2,
+                        "delays_seconds": [0.01, 0.02],
+                        "retryable_statuses": [429, 500],
+                        "non_retryable_statuses": [400, 401, 403, 404],
+                        "backoff": {"enabled": False},
+                    },
+                },
+            },
+        }
+
+    def test_retry_429_exhaustion_observability(self):
+        from scripts.api_client import call_llm_with_retry
+        call_count = 0
+
+        def _fake_call(prompt, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return {"success": False, "http_status": 429, "error": "HTTP 429"}
+
+        config = self._make_retry_config()
+        with mock.patch("scripts.api_client.call_llm", side_effect=_fake_call), \
+             mock.patch("scripts.api_client.time.sleep"):
+            result = call_llm_with_retry(
+                "test", retries=2, delays=(0.01, 0.02), config=config,
+            )
+
+        self.assertFalse(result["success"])
+        self.assertEqual(call_count, 3)
+        self.assertEqual(result["attempt_count"], 3)
+        self.assertEqual(result["attempts"], 3)
+        self.assertTrue(result["retryable"])
+        self.assertEqual(result["error_category"], "rate_limited")
+        self.assertEqual(result["final_http_status"], 429)
+        self.assertEqual(result["http_status"], 429)
+
+    def test_retry_401_non_retryable_observability(self):
+        from scripts.api_client import call_llm_with_retry
+        call_count = 0
+
+        def _fake_call(prompt, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return {"success": False, "http_status": 401, "error": "HTTP 401"}
+
+        config = self._make_retry_config()
+        with mock.patch("scripts.api_client.call_llm", side_effect=_fake_call):
+            result = call_llm_with_retry(
+                "test", retries=2, delays=(0.01, 0.02), config=config,
+            )
+
+        self.assertEqual(call_count, 1)
+        self.assertFalse(result["retryable"])
+        self.assertEqual(result["error_category"], "auth_error")
+        self.assertEqual(result["final_http_status"], 401)
+
+    def test_retry_success_observability(self):
+        from scripts.api_client import call_llm_with_retry
+        call_count = 0
+        responses = [
+            {"success": False, "http_status": 429, "error": "HTTP 429"},
+            {"success": True, "http_status": 200, "content": "ok",
+             "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}},
+        ]
+
+        def _fake_call(prompt, **kwargs):
+            nonlocal call_count
+            idx = call_count
+            call_count += 1
+            return responses[idx] if idx < len(responses) else responses[-1]
+
+        config = self._make_retry_config()
+        with mock.patch("scripts.api_client.call_llm", side_effect=_fake_call), \
+             mock.patch("scripts.api_client.time.sleep"):
+            result = call_llm_with_retry(
+                "test", retries=2, delays=(0.01, 0.02), config=config,
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["attempt_count"], 2)
+        self.assertEqual(result["attempts"], 2)
+        self.assertFalse(result["retryable"])
+        self.assertIsNone(result["error_category"])
+        self.assertEqual(result["input_tokens"], 5)
+        self.assertEqual(result["output_tokens"], 3)
+        self.assertEqual(result["total_tokens"], 8)
+        self.assertEqual(result["output_chars"], len("ok"))
+
+    # ------------------------------------------------------------------
+    # Panel per-call observability
+    # ------------------------------------------------------------------
+
+    def test_panel_per_call_observability(self):
+        from scripts.panel import dispatch_panel
+
+        config = {
+            "api": {
+                "primary": {
+                    "endpoint": "http://127.0.0.1:1/nonexistent",
+                    "timeout": {
+                        "panel_floor": 2, "judge_floor": 2,
+                        "panel_throughput": 9999, "judge_throughput": 9999,
+                        "overhead_seconds": 0, "max_timeout": 300,
+                    },
+                    "retry": {"max_retries": 0, "delays_seconds": [0.01], "backoff": {"enabled": False}},
+                },
+            },
+            "pipeline": {"min_survivors": 1, "max_panel_workers": 2},
+        }
+        scenario_cfg = {
+            "panel": {
+                "models": [
+                    {"name": "deepseek-v4-flash", "count": 2, "temp": 0.75},
+                ]
+            },
+            "judge": {},
+            "cleaning": {},
+            "conciseness_suffix": "",
+        }
+
+        with mock.patch(
+            "scripts.panel.get_scenario_config",
+            return_value=scenario_cfg,
+        ), mock.patch(
+            "scripts.panel.call_llm_with_retry",
+            return_value={
+                "success": True,
+                "content": "mock response",
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                "error": None,
+                "http_status": 200,
+                "error_category": None,
+                "attempt_count": 2,
+                "retryable": False,
+                "final_http_status": 200,
+                "retry_stopped_reason": "success",
+                "input_chars": 20,
+                "output_chars": 12,
+                "reasoning_output_chars": 0,
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+                "elapsed": 0.1,
+                "from_fallback": None,
+                "fallback_provider": None,
+                "fallback_error": None,
+            },
+        ):
+            panel_result = dispatch_panel("test query", "general", config=config)
+
+        self.assertTrue(panel_result.get("success"))
+        self.assertGreater(len(panel_result.get("responses", [])), 0)
+        for r in panel_result.get("responses", []):
+            self.assertIn("attempt_count", r)
+            self.assertIn("retryable", r)
+            self.assertIn("error_category", r)
+            self.assertIn("final_http_status", r)
+            self.assertIn("input_chars", r)
+            self.assertIn("output_chars", r)
+            self.assertIn("input_tokens", r)
+            self.assertIn("output_tokens", r)
+            self.assertIn("total_tokens", r)
+
+    # ------------------------------------------------------------------
+    # Panel aggregates
+    # ------------------------------------------------------------------
+
+    def test_panel_aggregates(self):
+        from scripts.panel import dispatch_panel
+
+        config = {
+            "api": {
+                "primary": {
+                    "endpoint": "http://127.0.0.1:1/nonexistent",
+                    "timeout": {
+                        "panel_floor": 2, "judge_floor": 2,
+                        "panel_throughput": 9999, "judge_throughput": 9999,
+                        "overhead_seconds": 0, "max_timeout": 300,
+                    },
+                    "retry": {"max_retries": 0, "delays_seconds": [0.01], "backoff": {"enabled": False}},
+                },
+            },
+            "pipeline": {"min_survivors": 0, "max_panel_workers": 2},
+        }
+        scenario_cfg = {
+            "panel": {
+                "models": [
+                    {"name": "deepseek-v4-flash", "count": 2, "temp": 0.75},
+                ]
+            },
+            "judge": {},
+            "cleaning": {},
+            "conciseness_suffix": "",
+        }
+
+        call_results = [
+            {
+                "success": True, "content": "ok1",
+                "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+                "error": None, "http_status": 200, "error_category": None,
+                "attempt_count": 1, "retryable": False, "final_http_status": 200,
+                "input_chars": 10, "output_chars": 3, "reasoning_output_chars": 0,
+                "input_tokens": 5, "output_tokens": 3, "total_tokens": 8, "elapsed": 0.05,
+                "from_fallback": None, "fallback_provider": None, "fallback_error": None,
+            },
+            {
+                "success": False, "content": None, "usage": None,
+                "error": "HTTP 500", "http_status": 500, "error_category": "server_error",
+                "attempt_count": 3, "retryable": True, "final_http_status": 500,
+                "input_chars": 10, "output_chars": 0, "reasoning_output_chars": 0,
+                "input_tokens": None, "output_tokens": None, "total_tokens": None,
+                "elapsed": 0.2,
+                "from_fallback": None, "fallback_provider": None, "fallback_error": None,
+            },
+        ]
+
+        with mock.patch(
+            "scripts.panel.get_scenario_config",
+            return_value=scenario_cfg,
+        ), mock.patch(
+            "scripts.panel.call_llm_with_retry",
+            side_effect=call_results,
+        ):
+            panel_result = dispatch_panel("test query", "general", config=config)
+
+        self.assertEqual(panel_result["attempt_count_total"], 4)
+        self.assertEqual(panel_result["retryable_error_count"], 1)
+        self.assertIsNotNone(panel_result["error_categories"])
+        self.assertIn("server_error", panel_result["error_categories"])
+        self.assertIn("200", panel_result.get("http_statuses", {}))
+        self.assertIn("500", panel_result.get("http_statuses", {}))
+        usage = panel_result.get("usage_totals", {})
+        self.assertEqual(usage.get("input_tokens", 0), 5)
+        self.assertEqual(usage.get("output_tokens", 0), 3)
+        self.assertEqual(usage.get("total_tokens", 0), 8)
+
+    # ------------------------------------------------------------------
+    # Judge single-stage propagation
+    # ------------------------------------------------------------------
+
+    def test_judge_single_stage_propagates_observability(self):
+        from scripts.judge import judge_single_stage
+
+        mock_llm_result = {
+            "success": True,
+            "content": "synthesized answer",
+            "error": None,
+            "usage": {"prompt_tokens": 50, "completion_tokens": 20, "total_tokens": 70},
+            "http_status": 200,
+            "error_category": None,
+            "attempt_count": 1,
+            "retryable": False,
+            "final_http_status": 200,
+            "retry_stopped_reason": "success",
+            "input_chars": 200,
+            "output_chars": 20,
+            "reasoning_output_chars": 0,
+            "input_tokens": 50,
+            "output_tokens": 20,
+            "total_tokens": 70,
+            "elapsed": 0.5,
+        }
+
+        with mock.patch(
+            "scripts.judge.call_llm_with_retry",
+            return_value=mock_llm_result,
+        ):
+            result = judge_single_stage(
+                "test query",
+                [{"label": "A", "content": "response A"}],
+                "general",
+                config={"api": {"primary": {"endpoint": "http://example.com",
+                          "timeout": {"judge_floor": 5, "judge_throughput": 20,
+                                      "overhead_seconds": 2, "max_timeout": 60}}}},
+                judge_config={
+                    "model": "mimo-v2.5", "temp": 1.0, "top_p": 0.95,
+                    "max_tokens": 2048, "thinking": {"type": "enabled"},
+                },
+            )
+
+        self.assertTrue(result["success"])
+        self.assertIsNone(result["error_category"])
+        self.assertEqual(result["attempt_count"], 1)
+        self.assertFalse(result["retryable"])
+        self.assertEqual(result["final_http_status"], 200)
+        self.assertEqual(result["output_chars"], 20)
+        self.assertEqual(result["input_tokens"], 50)
+        self.assertEqual(result["output_tokens"], 20)
+        self.assertEqual(result["total_tokens"], 70)
+
+    # ------------------------------------------------------------------
+    # Judge two-stage propagation
+    # ------------------------------------------------------------------
+
+    def test_judge_two_stage_propagates_observability(self):
+        from scripts.judge import judge_two_stage
+
+        mock_stage1 = {
+            "success": True,
+            "content": "analysis",
+            "error": None,
+            "usage": {"prompt_tokens": 30, "completion_tokens": 15, "total_tokens": 45},
+            "http_status": 200,
+            "error_category": None,
+            "attempt_count": 1,
+            "retryable": False,
+            "final_http_status": 200,
+            "retry_stopped_reason": "success",
+            "input_chars": 100,
+            "output_chars": 8,
+            "reasoning_output_chars": 0,
+            "input_tokens": 30,
+            "output_tokens": 15,
+            "total_tokens": 45,
+            "elapsed": 0.3,
+        }
+        mock_stage2 = {
+            "success": True,
+            "content": "final answer",
+            "error": None,
+            "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
+            "http_status": 200,
+            "error_category": None,
+            "attempt_count": 1,
+            "retryable": False,
+            "final_http_status": 200,
+            "retry_stopped_reason": "success",
+            "input_chars": 150,
+            "output_chars": 11,
+            "reasoning_output_chars": 0,
+            "input_tokens": 20,
+            "output_tokens": 10,
+            "total_tokens": 30,
+            "elapsed": 0.3,
+        }
+
+        call_count = [0]
+
+        def _mock_call(prompt, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return dict(mock_stage1)
+            return dict(mock_stage2)
+
+        with mock.patch(
+            "scripts.judge.call_llm_with_retry",
+            side_effect=_mock_call,
+        ):
+            result = judge_two_stage(
+                "test query",
+                [{"label": "A", "content": "response A"}],
+                "general",
+                config={"api": {"primary": {"endpoint": "http://example.com",
+                          "timeout": {"judge_floor": 5, "judge_throughput": 20,
+                                      "overhead_seconds": 2, "max_timeout": 60}}}},
+                judge_config={
+                    "model": "mimo-v2.5", "temp": 1.0, "top_p": 0.95,
+                    "max_tokens": 2048, "thinking": {"type": "enabled"},
+                    "stage1": {}, "stage2": {},
+                },
+            )
+
+        self.assertTrue(result["success"])
+        self.assertIn("error_category", result.get("stage1", {}))
+        self.assertIn("attempt_count", result.get("stage1", {}))
+        self.assertIn("retryable", result.get("stage1", {}))
+        self.assertIn("final_http_status", result.get("stage1", {}))
+        self.assertEqual(result["stage1"]["input_tokens"], 30)
+        self.assertEqual(result["stage1"]["output_tokens"], 15)
+        self.assertEqual(result["stage1"]["total_tokens"], 45)
+        self.assertIn("error_category", result.get("stage2", {}))
+        self.assertIn("attempt_count", result.get("stage2", {}))
+        self.assertIn("retryable", result.get("stage2", {}))
+        self.assertIn("final_http_status", result.get("stage2", {}))
+        self.assertEqual(result["stage2"]["input_tokens"], 20)
+        self.assertEqual(result["stage2"]["output_tokens"], 10)
+        self.assertEqual(result["stage2"]["total_tokens"], 30)
 
 
 

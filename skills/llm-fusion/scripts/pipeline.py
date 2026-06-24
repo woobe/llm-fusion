@@ -212,7 +212,19 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
             result["answer"] = direct.get("content")
             result["reasoning_content"] = direct.get("reasoning_content")
             result["metadata"]["level"] = "express"
-            result["metadata"]["judge"] = {"mode": "express_direct", "model": express_cfg.get("model", "deepseek-v4-flash")}
+            result["metadata"]["judge"] = {
+                "mode": "express_direct",
+                "model": express_cfg.get("model", "deepseek-v4-flash"),
+                "error_category": direct.get("error_category"),
+                "attempt_count": direct.get("attempt_count", 1),
+                "retryable": direct.get("retryable", False),
+                "final_http_status": direct.get("final_http_status"),
+                "input_chars": direct.get("input_chars", 0),
+                "output_chars": direct.get("output_chars", 0),
+                "input_tokens": direct.get("input_tokens"),
+                "output_tokens": direct.get("output_tokens"),
+                "total_tokens": direct.get("total_tokens"),
+            }
             result["elapsed"] = time.monotonic() - express_start
             result["metadata"]["timing_ms"] = {
                 "classification": int(t_class * 1000),
@@ -222,8 +234,15 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
             return _save(result)
         # Record express QA failure metadata before falling through
         # to normal panel+judge.
-        result["metadata"]["express_qa_error"] = direct.get("error")
-        result["metadata"]["express_qa_elapsed_ms"] = int((time.monotonic() - express_start) * 1000)
+        result["metadata"]["express_qa_observability"] = {
+            "error": direct.get("error"),
+            "error_category": direct.get("error_category"),
+            "attempt_count": direct.get("attempt_count", 0),
+            "retryable": direct.get("retryable", False),
+            "final_http_status": direct.get("final_http_status"),
+            "elapsed_ms": int((time.monotonic() - express_start) * 1000),
+            "output_chars": direct.get("output_chars", 0),
+        }
         if verbose:
             print("[pipeline] Express QA call failed, falling through to normal panel+judge",
                   file=sys.stderr)
@@ -290,6 +309,11 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
         "cancelled_count": panel_result.get("cancelled_count", 0),
         "late_completed_count": panel_result.get("late_completed_count", 0),
         "panel_calls_early_exit": panel_result.get("panel_calls_early_exit", False),
+        "attempt_count_total": panel_result.get("attempt_count_total", 0),
+        "retryable_error_count": panel_result.get("retryable_error_count", 0),
+        "error_categories": panel_result.get("error_categories"),
+        "http_statuses": panel_result.get("http_statuses"),
+        "usage_totals": panel_result.get("usage_totals"),
     }
     result["metadata"]["panel"].update(panel_metrics)
 
@@ -305,6 +329,21 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
             "usage": r.get("usage"),
             "error": r.get("error"),
             "timing_ms": r.get("timing_ms"),
+            "attempt_count": r.get("attempt_count"),
+            "retryable": r.get("retryable"),
+            "final_http_status": r.get("final_http_status"),
+            "http_status": r.get("http_status"),
+            "error_category": r.get("error_category"),
+            "retry_stopped_reason": r.get("retry_stopped_reason"),
+            "input_chars": r.get("input_chars", 0),
+            "output_chars": r.get("output_chars", 0),
+            "reasoning_output_chars": r.get("reasoning_output_chars", 0),
+            "input_tokens": r.get("input_tokens"),
+            "output_tokens": r.get("output_tokens"),
+            "total_tokens": r.get("total_tokens"),
+            "from_fallback": r.get("from_fallback"),
+            "fallback_provider": r.get("fallback_provider"),
+            "fallback_error": r.get("fallback_error"),
         })
 
     if verbose:
@@ -489,6 +528,10 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
                     "panel_response_compacted_chars": judge_result.get("stage1", {}).get(
                         "panel_response_compacted_chars", 0
                     ),
+                    "error_category": judge_result.get("stage1", {}).get("error_category"),
+                    "attempt_count": judge_result.get("stage1", {}).get("attempt_count", 0),
+                    "retryable": judge_result.get("stage1", {}).get("retryable", False),
+                    "final_http_status": judge_result.get("stage1", {}).get("final_http_status"),
                 },
                 "stage2": {
                     "success": judge_result.get("stage2", {}).get("success"),
@@ -503,6 +546,10 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
                     "budget_warning": judge_result.get("stage2", {}).get("budget_warning", False),
                     "stage_content_compacted": judge_result.get("stage2", {}).get("stage_content_compacted", False),
                     "stage_content_compacted_chars": judge_result.get("stage2", {}).get("stage_content_compacted_chars", 0),
+                    "error_category": judge_result.get("stage2", {}).get("error_category"),
+                    "attempt_count": judge_result.get("stage2", {}).get("attempt_count", 0),
+                    "retryable": judge_result.get("stage2", {}).get("retryable", False),
+                    "final_http_status": judge_result.get("stage2", {}).get("final_http_status"),
                 },
             }
         else:
@@ -525,6 +572,10 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
                 },
                 "usage": judge_result.get("usage"),
                 "elapsed": judge_result.get("elapsed", 0),
+                "error_category": judge_result.get("error_category"),
+                "attempt_count": judge_result.get("attempt_count", 0),
+                "retryable": judge_result.get("retryable", False),
+                "final_http_status": judge_result.get("final_http_status"),
                 "prompt_budget": {
                     "enabled": judge_result.get("prompt_budget_enabled"),
                     "exceeded": judge_result.get("prompt_budget_exceeded"),
@@ -693,6 +744,12 @@ def _apply_direct_fallback(result, reason, query, config, deadline_timestamp=Non
     result["metadata"]["fallback_error"] = (
         direct_result.get("error") or direct_result.get("fallback_error")
     )
+    result["metadata"]["fallback_error_category"] = direct_result.get("error_category")
+    result["metadata"]["fallback_attempt_count"] = direct_result.get("attempt_count", 0)
+    result["metadata"]["fallback_final_http_status"] = direct_result.get("final_http_status")
+    result["metadata"]["fallback_retryable"] = direct_result.get("retryable", False)
+    result["metadata"]["fallback_usage"] = direct_result.get("usage")
+    result["metadata"]["fallback_output_chars"] = direct_result.get("output_chars", 0)
 
     if direct_result.get("success"):
         result["success"] = True
