@@ -284,6 +284,7 @@ def dispatch_panel(query, scenario_id, config=None, max_workers=None, tier=None,
                 extra_params=spec.get("extra_params"),
                 retries=max_retries,
                 delays=delays,
+                config=config,
             )
             return {
                 "label": spec["label"],

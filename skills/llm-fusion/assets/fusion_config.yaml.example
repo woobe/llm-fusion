@@ -215,6 +215,21 @@ fusion:
       retry:
         max_retries: 2
         delays_seconds: [1, 3]
+        retryable_statuses: [429, 500, 502, 503, 504]
+        non_retryable_statuses: [400, 401, 403, 404]
+        backoff:
+          enabled: true
+          base_delay_seconds: 1.0
+          max_delay_seconds: 30.0
+          jitter_ratio: 0.25
+    rate_limit:
+      enabled: true
+      requests_per_second: 10.0
+      burst: 20
+    fallback:
+      enabled: false
+      provider: openrouter
+      endpoint: "https://openrouter.ai/api/v1/chat/completions"
 
   pipeline:
     default_tier: medium
@@ -239,6 +254,14 @@ fusion:
         - "\\bhow does\\b"
         - "\\bwhy does\\b"
         - "\\bwith examples?\\b"
+    direct_fallback:
+      model: deepseek-v4-flash
+      temperature: 0.75
+      top_p: 0.9
+      max_tokens: 2000
+      timeout: null
+      retries: 1
+      delays_seconds: [2]
     retry:
       low1:
         max_retries: 0

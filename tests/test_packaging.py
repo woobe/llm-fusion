@@ -57,8 +57,8 @@ class TestScriptsImports(unittest.TestCase):
 
     def test_fallback_import(self):
         """Fallback module should be importable."""
-        from scripts.fallback import RateLimiter, call_with_fallback
-        self.assertTrue(callable(call_with_fallback))
+        from scripts.fallback import RateLimiter
+        self.assertTrue(callable(RateLimiter))
 
     def test_judge_import(self):
         """Judge functions should be importable."""

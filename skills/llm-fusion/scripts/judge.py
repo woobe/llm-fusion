@@ -400,6 +400,7 @@ def judge_single_stage(query, responses, scenario_id, config=None, judge_config=
         endpoint=endpoint,
         retries=judge_retries,
         delays=judge_delays,
+        config=config,
         **judge_kwargs,
     )
 
@@ -520,6 +521,7 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
         endpoint=endpoint,
         retries=judge_retries,
         delays=judge_delays,
+        config=config,
         **stage1_kwargs,
     )
 
@@ -571,6 +573,7 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
         endpoint=endpoint,
         retries=judge_retries,
         delays=judge_delays,
+        config=config,
         **stage2_kwargs,
     )
 

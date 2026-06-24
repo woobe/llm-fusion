@@ -147,14 +147,8 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
             return _save(result)
         if verbose:
             print(f"[pipeline] Falling back to direct call", file=sys.stderr)
-        direct_result = _direct_fallback(query, config)
-        if direct_result["success"]:
-            result["success"] = True
-            result["answer"] = direct_result.get("content")
-            result["reasoning_content"] = direct_result.get("reasoning_content")
-            result["metadata"]["level"] = "low"
-            result["metadata"]["judge"] = {"mode": "direct_fallback"}
-        else:
+        direct_result = _apply_direct_fallback(result, f"soft_deadline:{phase}", query, config)
+        if not direct_result.get("success"):
             result["error"] = f"Deadline exceeded during {phase}, fallback also failed"
             result["elapsed"] = elapsed
         return _save(result)
@@ -207,6 +201,7 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
             endpoint=endpoint,
             retries=1,
             delays=(2,),
+            config=config,
         )
         if direct["success"]:
             result["success"] = True
@@ -221,6 +216,10 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
                 "total": int((time.monotonic() - start) * 1000),
             }
             return _save(result)
+        # Record express QA failure metadata before falling through
+        # to normal panel+judge.
+        result["metadata"]["express_qa_error"] = direct.get("error")
+        result["metadata"]["express_qa_elapsed_ms"] = int((time.monotonic() - express_start) * 1000)
         if verbose:
             print("[pipeline] Express QA call failed, falling through to normal panel+judge",
                   file=sys.stderr)
@@ -309,13 +308,8 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
         # Graceful degradation: try a direct LLM call
         if verbose:
             print("[pipeline] Graceful degradation: making direct LLM call...")
-        direct_result = _direct_fallback(query, config)
-        if direct_result["success"]:
-            result["success"] = True
-            result["answer"] = direct_result.get("content")
-            result["reasoning_content"] = direct_result.get("reasoning_content")
-            result["metadata"]["level"] = "low"
-            result["metadata"]["judge"] = {"mode": "direct_fallback"}
+        direct_result = _apply_direct_fallback(result, "panel_failure", query, config)
+        if direct_result.get("success"):
             result["metadata"]["timing_ms"] = {
                 "classification": int(t_class * 1000),
                 "panel": int(t_panel * 1000),
@@ -355,13 +349,8 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
             return _save(result)
         if verbose:
             print(f"[pipeline] Not enough survivors ({survived}), using direct fallback...")
-        direct_result = _direct_fallback(query, config)
-        if direct_result["success"]:
-            result["success"] = True
-            result["answer"] = direct_result.get("content")
-            result["reasoning_content"] = direct_result.get("reasoning_content")
-            result["metadata"]["level"] = "low"
-            result["metadata"]["judge"] = {"mode": "direct_fallback"}
+        direct_result = _apply_direct_fallback(result, "insufficient_survivors", query, config)
+        if direct_result.get("success"):
             result["metadata"]["timing_ms"] = {
                 "classification": int(t_class * 1000),
                 "panel": int(t_panel * 1000),
@@ -370,6 +359,11 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
             }
             result["elapsed"] = time.monotonic() - start
             return _save(result)
+        # Fallback also failed — return early (was previously falling
+        # through to judge with too few survivors).
+        result["error"] = f"Not enough survivors ({survived} < minimum), fallback also failed"
+        result["elapsed"] = time.monotonic() - start
+        return _save(result)
 
     # --- Step 5: Judge ---
     judge_config = scenario_cfg.get("judge", {})
@@ -404,14 +398,8 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
             return _save(result)
         if verbose:
             print("[pipeline] Judge failed, using direct fallback...")
-        direct_result = _direct_fallback(query, config)
-        if direct_result["success"]:
-            result["success"] = True
-            result["answer"] = direct_result.get("content")
-            result["reasoning_content"] = direct_result.get("reasoning_content")
-            result["metadata"]["level"] = "low"
-            result["metadata"]["judge"] = {"mode": "direct_fallback"}
-        else:
+        direct_result = _apply_direct_fallback(result, "judge_failure", query, config)
+        if not direct_result.get("success"):
             result["error"] = "Judge and fallback both failed"
             result["elapsed"] = time.monotonic() - start
             return _save(result)
@@ -492,32 +480,150 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
     return _save(result)
 
 
+def _resolve_direct_fallback_config(config):
+    """Resolve direct fallback settings from config with safe defaults.
+
+    Reads ``pipeline.direct_fallback`` from *config* and returns a
+    normalized dict with all keys needed by :func:`_direct_fallback`.
+    When the config block is missing or incomplete, safe defaults
+    matching the previous hardcoded behavior are used.
+
+    Returns
+    -------
+    dict with keys: model, temperature, top_p, max_tokens, timeout,
+    retries, delays_seconds, endpoint.
+    Never raises.
+    """
+    defaults = {
+        "model": "deepseek-v4-flash",
+        "temperature": 0.75,
+        "top_p": 0.9,
+        "max_tokens": 2000,
+        "timeout": 60,
+        "retries": 1,
+        "delays_seconds": (2,),
+        "endpoint": None,
+    }
+
+    if not config or not isinstance(config, dict):
+        return dict(defaults)
+
+    fb_cfg = config.get("pipeline", {}).get("direct_fallback", {})
+    if not isinstance(fb_cfg, dict):
+        fb_cfg = {}
+
+    resolved = dict(defaults)
+
+    # Scalar overrides
+    for key in ("model", "temperature", "top_p", "retries"):
+        val = fb_cfg.get(key)
+        if val is not None:
+            resolved[key] = val
+
+    # max_tokens is the user-facing config key; map to max_completion_tokens
+    # in _direct_fallback's call_llm_with_retry call.
+    if "max_tokens" in fb_cfg and fb_cfg["max_tokens"] is not None:
+        resolved["max_tokens"] = int(fb_cfg["max_tokens"])
+
+    # Timeout: explicit value > api.primary.timeout.judge_floor > 60
+    explicit_timeout = fb_cfg.get("timeout")
+    if explicit_timeout is not None:
+        resolved["timeout"] = int(explicit_timeout)
+    else:
+        api_cfg = config.get("api", {}).get("primary", {})
+        timeout_cfg = api_cfg.get("timeout", {})
+        resolved["timeout"] = timeout_cfg.get("judge_floor", 60)
+
+    # delays_seconds
+    delays = fb_cfg.get("delays_seconds")
+    if delays is not None and isinstance(delays, (list, tuple)):
+        resolved["delays_seconds"] = tuple(delays)
+    else:
+        resolved["delays_seconds"] = (2,)
+
+    # Endpoint from api.primary.endpoint
+    api_cfg = config.get("api", {}).get("primary", {})
+    resolved["endpoint"] = api_cfg.get("endpoint")
+
+    return resolved
+
+
 def _direct_fallback(query, config):
     """Make a direct single LLM call as graceful degradation fallback.
+
+    Uses config-driven settings from ``pipeline.direct_fallback``,
+    falling back to hardcoded safe defaults when the config block is
+    missing.
 
     Returns call_llm result dict.
     Never raises.
     """
     from scripts.api_client import call_llm_with_retry
 
-    api_cfg = {}
-    endpoint = None
-    if config and isinstance(config, dict):
-        api_cfg = config.get("api", {}).get("primary", {})
-        endpoint = api_cfg.get("endpoint")
-        timeout_cfg = api_cfg.get("timeout", {})
-        fb_timeout = timeout_cfg.get("judge_floor", 60)
-    else:
-        fb_timeout = 60
+    cfg = _resolve_direct_fallback_config(config)
 
     return call_llm_with_retry(
         prompt=query,
-        model="deepseek-v4-flash",
-        temperature=0.75,
-        top_p=0.9,
-        max_completion_tokens=2000,
-        timeout=fb_timeout,
-        endpoint=endpoint,
-        retries=1,
-        delays=(2,),
+        model=cfg["model"],
+        temperature=cfg["temperature"],
+        top_p=cfg["top_p"],
+        max_completion_tokens=cfg["max_tokens"],
+        timeout=cfg["timeout"],
+        endpoint=cfg["endpoint"],
+        retries=cfg["retries"],
+        delays=cfg["delays_seconds"],
+        config=config,
     )
+
+
+def _apply_direct_fallback(result, reason, query, config):
+    """Apply direct fallback to *result*, setting fallback metadata.
+
+    Parameters
+    ----------
+    result : dict
+        Pipeline result dict (mutated in place).
+    reason : str
+        Fallback reason string (e.g. ``"panel_failure"``,
+        ``"soft_deadline:panel"``).
+    query : str
+        Original user query.
+    config : dict
+        Fusion config dict.
+
+    Returns
+    -------
+    dict
+        The raw ``direct_result`` from :func:`_direct_fallback`.
+        Callers can check ``direct_result.get("success")`` to
+        determine whether the fallback call itself succeeded.
+    Never raises.
+    """
+    fallback_cfg = _resolve_direct_fallback_config(config)
+    fallback_model = fallback_cfg["model"]
+
+    fb_start = time.monotonic()
+    direct_result = _direct_fallback(query, config)
+    fb_elapsed = time.monotonic() - fb_start
+
+    # Always set fallback metadata
+    result["metadata"]["fallback_reason"] = reason
+    result["metadata"]["fallback_model"] = fallback_model
+    result["metadata"]["fallback_elapsed_ms"] = int(fb_elapsed * 1000)
+    result["metadata"]["fallback_error"] = (
+        direct_result.get("error") or direct_result.get("fallback_error")
+    )
+
+    if direct_result.get("success"):
+        result["success"] = True
+        result["answer"] = direct_result.get("content")
+        result["reasoning_content"] = direct_result.get("reasoning_content")
+        result["metadata"]["level"] = "low"
+        result["metadata"]["judge"] = {
+            "mode": "direct_fallback",
+            "model": fallback_model,
+        }
+        result.pop("error", None)
+    # On failure leave success=False; caller sets the top-level error.
+
+    return direct_result

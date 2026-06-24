@@ -267,7 +267,23 @@ user query
 
 ## Changelog
 
-### v0.2.9 (current)
+### v0.2.10 (current)
+- **Config-driven direct fallback** — consolidated hardcoded fallback logic into one reusable helper
+  - New `_apply_direct_fallback()` helper for all failure paths
+  - Config section: `pipeline.direct_fallback` (model, temperature, top_p, max_tokens, timeout, retries, delays_seconds)
+  - Consistent metadata: `fallback_reason`, `fallback_model`, `fallback_error`, `fallback_elapsed_ms`
+  - Bug fix: insufficient survivors no longer falls through to judge when fallback fails
+- **Fallback provider + rate limiter** — integrated existing fallback.py into main API path
+  - Thread-safe `RateLimiter` with token bucket algorithm
+  - Rate limiting applied to all outbound API calls
+  - Status-aware retry: no retry on 401/403, retry on 429/5xx/None
+  - Exponential backoff with jitter for retryable statuses
+  - Optional provider fallback after primary exhaustion
+  - Config keys: `api.rate_limit` and `api.fallback`
+- Dead code removed: `call_with_fallback()` in fallback.py
+- 226 tests passing (was 182)
+
+### v0.2.9
 - **Classifier optimization** — added `classification.enabled: false` config flag
   - LLM second-pass classifier now opt-in only (default: disabled)
   - Saves 1 API call per general query
@@ -472,7 +488,7 @@ llm-fusion/
   README.md, LICENSE, .gitignore
   skills/llm-fusion/    # skill bundle
     SKILL.md, scripts/ (12 modules), assets/ (config)
-  tests/                # 169 unit tests
+  tests/                # 226 unit tests
   local/                # dev notes
 ```
 

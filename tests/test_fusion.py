@@ -894,6 +894,427 @@ class TestPipeline(unittest.TestCase):
         self.assertIsNone(judge_config["reasoning_mode"])
         self.assertIsNone(judge_config["max_completion_tokens"])
 
+    # ------------------------------------------------------------------
+    # Config-Driven Direct Fallback tests
+    # ------------------------------------------------------------------
+
+    def test_direct_fallback_uses_config_values(self):
+        """_direct_fallback passes config-driven values to call_llm_with_retry."""
+        from unittest import mock
+        from scripts.pipeline import _direct_fallback
+
+        config = {
+            "pipeline": {
+                "direct_fallback": {
+                    "model": "custom-model",
+                    "temperature": 0.2,
+                    "top_p": 0.8,
+                    "max_tokens": 1234,
+                    "timeout": 7,
+                    "retries": 3,
+                    "delays_seconds": [0.1, 0.2, 0.3],
+                },
+            },
+            "api": {
+                "primary": {
+                    "endpoint": "http://example.invalid",
+                    "timeout": {"judge_floor": 99},
+                },
+            },
+        }
+
+        captured = {}
+
+        def _fake_call(**kwargs):
+            captured.update(kwargs)
+            return {"success": True, "content": "ok", "elapsed": 0.01}
+
+        # Patch call_llm_with_retry at its definition site
+        with mock.patch("scripts.api_client.call_llm_with_retry", side_effect=_fake_call):
+            result = _direct_fallback("test query", config)
+
+        self.assertEqual(captured["model"], "custom-model")
+        self.assertEqual(captured["temperature"], 0.2)
+        self.assertEqual(captured["top_p"], 0.8)
+        # max_tokens config key maps to max_completion_tokens
+        self.assertEqual(captured["max_completion_tokens"], 1234)
+        self.assertNotIn("max_tokens", captured)
+        self.assertEqual(captured["timeout"], 7)
+        self.assertEqual(captured["retries"], 3)
+        self.assertEqual(captured["delays"], (0.1, 0.2, 0.3))
+        self.assertEqual(captured["endpoint"], "http://example.invalid")
+
+    def test_direct_fallback_preserves_defaults_with_empty_config(self):
+        """_direct_fallback uses safe defaults when config has no direct_fallback block."""
+        from unittest import mock
+        from scripts.pipeline import _direct_fallback
+
+        captured = {}
+
+        def _fake_call(**kwargs):
+            captured.update(kwargs)
+            return {"success": True, "content": "ok", "elapsed": 0.01}
+
+        with mock.patch("scripts.api_client.call_llm_with_retry", side_effect=_fake_call):
+            result = _direct_fallback("test", {})
+
+        self.assertEqual(captured["model"], "deepseek-v4-flash")
+        self.assertEqual(captured["temperature"], 0.75)
+        self.assertEqual(captured["top_p"], 0.9)
+        self.assertEqual(captured["max_completion_tokens"], 2000)
+        self.assertEqual(captured["timeout"], 60)
+        self.assertEqual(captured["retries"], 1)
+        self.assertEqual(captured["delays"], (2,))
+
+    def test_apply_direct_fallback_writes_success_metadata(self):
+        """_apply_direct_fallback sets fallback metadata on success."""
+        from unittest import mock
+        from scripts.pipeline import _apply_direct_fallback
+
+        result = {
+            "success": False,
+            "answer": None,
+            "reasoning_content": None,
+            "metadata": {
+                "level": "low",
+                "judge": {},
+                "timing_ms": {},
+            },
+        }
+
+        config = {
+            "pipeline": {
+                "direct_fallback": {
+                    "model": "fallback-model",
+                },
+            },
+            "api": {
+                "primary": {
+                    "endpoint": "http://example.invalid",
+                    "timeout": {"judge_floor": 5},
+                },
+            },
+        }
+
+        def _fake_fallback(query, cfg):
+            return {
+                "success": True,
+                "content": "fallback answer",
+                "reasoning_content": "some reasoning",
+                "elapsed": 0.05,
+            }
+
+        with mock.patch("scripts.pipeline._direct_fallback", side_effect=_fake_fallback):
+            direct_result = _apply_direct_fallback(result, "test_reason", "query", config)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["answer"], "fallback answer")
+        self.assertEqual(result["reasoning_content"], "some reasoning")
+        self.assertEqual(result["metadata"]["level"], "low")
+        self.assertEqual(result["metadata"]["judge"], {"mode": "direct_fallback", "model": "fallback-model"})
+        self.assertEqual(result["metadata"]["fallback_reason"], "test_reason")
+        self.assertEqual(result["metadata"]["fallback_model"], "fallback-model")
+        self.assertIsInstance(result["metadata"]["fallback_elapsed_ms"], int)
+        self.assertGreaterEqual(result["metadata"]["fallback_elapsed_ms"], 0)
+        self.assertIsNone(result["metadata"]["fallback_error"])
+
+    def test_apply_direct_fallback_writes_failure_metadata(self):
+        """_apply_direct_fallback sets fallback_error and leaves success=False on failure."""
+        from unittest import mock
+        from scripts.pipeline import _apply_direct_fallback
+
+        result = {
+            "success": False,
+            "answer": None,
+            "metadata": {
+                "level": "low",
+                "judge": {},
+                "timing_ms": {},
+            },
+        }
+
+        config = {
+            "pipeline": {"direct_fallback": {"model": "fb-model"}},
+            "api": {"primary": {"timeout": {"judge_floor": 5}}},
+        }
+
+        def _fake_fallback(query, cfg):
+            return {"success": False, "error": "boom", "elapsed": 0.05}
+
+        with mock.patch("scripts.pipeline._direct_fallback", side_effect=_fake_fallback):
+            direct_result = _apply_direct_fallback(result, "failure_reason", "query", config)
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["metadata"]["fallback_reason"], "failure_reason")
+        self.assertEqual(result["metadata"]["fallback_error"], "boom")
+        self.assertIsInstance(result["metadata"]["fallback_elapsed_ms"], int)
+        self.assertGreaterEqual(result["metadata"]["fallback_elapsed_ms"], 0)
+
+    def test_pipeline_panel_failure_branch_uses_fallback_metadata(self):
+        """Pipeline panel failure uses _apply_direct_fallback and records fallback metadata."""
+        from unittest import mock
+        from scripts.pipeline import run_pipeline
+
+        config = {
+            "default": {
+                "panel": {
+                    "models": [
+                        {"name": "deepseek-v4-flash", "count": 1, "temp": 0.75,
+                         "top_p": 0.9, "max_completion_tokens": 100},
+                    ],
+                },
+                "judge": {"model": "deepseek-v4-flash", "temp": 0.0, "top_p": 1.0},
+            },
+            "scenarios": {"general": {}},
+            "cleaning": {"profiles": {"general": {}}},
+            "api": {
+                "primary": {
+                    "endpoint": "http://127.0.0.1:1/nonexistent",
+                    "timeout": {"panel_floor": 2, "judge_floor": 2,
+                                "panel_throughput": 9999, "judge_throughput": 9999,
+                                "overhead_seconds": 0, "max_timeout": 300},
+                    "retry": {"max_retries": 0, "delays_seconds": []},
+                },
+            },
+            "pipeline": {
+                "soft_deadline_seconds": 0,
+                "max_panel_workers": 1,
+                "min_survivors": 1,
+                "graceful_degradation": True,
+            },
+        }
+
+        def _fake_fallback(query, cfg):
+            return {
+                "success": True,
+                "content": "fallback answer via panel failure",
+                "reasoning_content": None,
+                "elapsed": 0.01,
+            }
+
+        with mock.patch("scripts.pipeline.load_config", return_value=config), \
+             mock.patch("scripts.pipeline.dispatch_panel",
+                        return_value={"success": False, "responses": []}), \
+             mock.patch("scripts.pipeline._direct_fallback", side_effect=_fake_fallback):
+            result = run_pipeline("test query")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["answer"], "fallback answer via panel failure")
+        self.assertEqual(result["metadata"]["fallback_reason"], "panel_failure")
+        self.assertIn("fallback_model", result["metadata"])
+        self.assertIn("fallback_elapsed_ms", result["metadata"])
+        self.assertIsNone(result["metadata"].get("fallback_error"))
+
+    def test_pipeline_insufficient_survivors_handles_fallback_failure(self):
+        """Insufficient survivors returns early with metadata when fallback also fails."""
+        from unittest import mock
+        from scripts.pipeline import run_pipeline
+
+        config = {
+            "default": {
+                "panel": {
+                    "models": [
+                        {"name": "deepseek-v4-flash", "count": 1, "temp": 0.75,
+                         "top_p": 0.9, "max_completion_tokens": 100},
+                    ],
+                },
+                "judge": {"model": "deepseek-v4-flash", "temp": 0.0, "top_p": 1.0},
+            },
+            "scenarios": {"general": {}},
+            "cleaning": {"profiles": {"general": {}}},
+            "api": {
+                "primary": {
+                    "endpoint": "http://127.0.0.1:1/nonexistent",
+                    "timeout": {"panel_floor": 2, "judge_floor": 2,
+                                "panel_throughput": 9999, "judge_throughput": 9999,
+                                "overhead_seconds": 0, "max_timeout": 300},
+                    "retry": {"max_retries": 0, "delays_seconds": []},
+                },
+            },
+            "pipeline": {
+                "soft_deadline_seconds": 0,
+                "max_panel_workers": 1,
+                "min_survivors": 2,
+                "graceful_degradation": True,
+            },
+        }
+
+        def _fake_fallback(query, cfg):
+            return {"success": False, "error": "fallback failed", "content": None, "elapsed": 0.01}
+
+        with mock.patch("scripts.pipeline.load_config", return_value=config), \
+             mock.patch("scripts.pipeline.dispatch_panel") as mock_panel, \
+             mock.patch("scripts.pipeline.clean_panel_responses") as mock_clean, \
+             mock.patch("scripts.pipeline._direct_fallback", side_effect=_fake_fallback), \
+             mock.patch("scripts.pipeline.judge_single_stage") as mock_judge:
+            mock_panel.return_value = {
+                "success": True,
+                "responses": [
+                    {"label": "A", "success": True, "content": "panel answer",
+                     "reasoning_content": None, "usage": {}, "elapsed": 0.01},
+                ],
+            }
+            mock_clean.return_value = {
+                "cleaned_responses": [],
+                "survived_count": 1,
+                "discarded_count": 0,
+            }
+            result = run_pipeline("test query")
+
+        # Should fail early with fallback metadata, NOT fall through to judge
+        self.assertFalse(result["success"])
+        self.assertEqual(result["metadata"].get("fallback_reason"), "insufficient_survivors")
+        self.assertEqual(result["metadata"].get("fallback_error"), "fallback failed")
+        self.assertIn("fallback_elapsed_ms", result["metadata"])
+        mock_judge.assert_not_called()
+
+    def test_pipeline_judge_failure_writes_fallback_metadata(self):
+        """Judge failure branch writes fallback metadata via _apply_direct_fallback."""
+        from unittest import mock
+        from scripts.pipeline import run_pipeline
+
+        config = {
+            "default": {
+                "panel": {
+                    "models": [
+                        {"name": "deepseek-v4-flash", "count": 1, "temp": 0.75,
+                         "top_p": 0.9, "max_completion_tokens": 100},
+                    ],
+                },
+                "judge": {"model": "deepseek-v4-flash", "temp": 0.0, "top_p": 1.0},
+            },
+            "scenarios": {"general": {}},
+            "cleaning": {"profiles": {"general": {}}},
+            "api": {
+                "primary": {
+                    "endpoint": "http://127.0.0.1:1/nonexistent",
+                    "timeout": {"panel_floor": 2, "judge_floor": 2,
+                                "panel_throughput": 9999, "judge_throughput": 9999,
+                                "overhead_seconds": 0, "max_timeout": 300},
+                    "retry": {"max_retries": 0, "delays_seconds": []},
+                },
+            },
+            "pipeline": {
+                "soft_deadline_seconds": 0,
+                "max_panel_workers": 1,
+                "min_survivors": 1,
+                "graceful_degradation": True,
+            },
+        }
+
+        def _fake_fallback(query, cfg):
+            return {
+                "success": True,
+                "content": "judge fallback answer",
+                "reasoning_content": None,
+                "elapsed": 0.01,
+            }
+
+        with mock.patch("scripts.pipeline.load_config", return_value=config), \
+             mock.patch("scripts.pipeline.dispatch_panel") as mock_panel, \
+             mock.patch("scripts.pipeline.clean_panel_responses") as mock_clean, \
+             mock.patch("scripts.pipeline._direct_fallback", side_effect=_fake_fallback):
+            mock_panel.return_value = {
+                "success": True,
+                "responses": [
+                    {"label": "A", "success": True, "content": "panel answer",
+                     "reasoning_content": None, "usage": {}, "elapsed": 0.01},
+                ],
+            }
+            mock_clean.return_value = {
+                "cleaned_responses": [{"label": "A", "cleaned_content": "panel answer"}],
+                "survived_count": 1,
+                "discarded_count": 0,
+            }
+            # Make judge fail by not patching judge — the fake endpoint will fail
+            result = run_pipeline("test query")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["answer"], "judge fallback answer")
+        self.assertEqual(result["metadata"]["fallback_reason"], "judge_failure")
+        self.assertIn("fallback_model", result["metadata"])
+        self.assertIn("fallback_elapsed_ms", result["metadata"])
+        self.assertIsNone(result["metadata"].get("fallback_error"))
+
+    def test_pipeline_soft_deadline_writes_fallback_metadata(self):
+        """Soft deadline fallback records fallback_reason starting with 'soft_deadline:'."""
+        from unittest import mock
+        from scripts.pipeline import run_pipeline
+
+        config = {
+            "default": {
+                "panel": {
+                    "models": [
+                        {"name": "deepseek-v4-flash", "count": 1, "temp": 0.75,
+                         "top_p": 0.9, "max_completion_tokens": 100},
+                    ],
+                },
+                "judge": {"model": "deepseek-v4-flash", "temp": 0.0, "top_p": 1.0},
+            },
+            "scenarios": {"general": {}},
+            "cleaning": {"profiles": {"general": {}}},
+            "api": {
+                "primary": {
+                    "endpoint": "http://127.0.0.1:1/nonexistent",
+                    "timeout": {"panel_floor": 2, "judge_floor": 2,
+                                "panel_throughput": 9999, "judge_throughput": 9999,
+                                "overhead_seconds": 0, "max_timeout": 300},
+                    "retry": {"max_retries": 0, "delays_seconds": []},
+                },
+            },
+            "pipeline": {
+                "soft_deadline_seconds": 0.001,
+                "max_panel_workers": 1,
+                "min_survivors": 1,
+                "graceful_degradation": True,
+            },
+        }
+
+        def _fake_fallback(query, cfg):
+            return {"success": True, "content": "deadline fallback", "reasoning_content": None, "elapsed": 0.01}
+
+        with mock.patch("scripts.pipeline.load_config", return_value=config), \
+             mock.patch("scripts.pipeline.dispatch_panel") as mock_panel, \
+             mock.patch("scripts.pipeline._direct_fallback", side_effect=_fake_fallback):
+            import time as _time
+            def _slow_panel(*args, **kwargs):
+                _time.sleep(0.1)
+                return {"success": True, "responses": [
+                    {"label": "A", "success": True, "content": "test",
+                     "reasoning_content": None, "usage": {}, "elapsed": 0.1},
+                ]}
+            mock_panel.side_effect = _slow_panel
+            result = run_pipeline("test query")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["answer"], "deadline fallback")
+        self.assertTrue(result["metadata"].get("deadline_exceeded", False))
+        self.assertIn("fallback_reason", result["metadata"])
+        self.assertTrue(
+            result["metadata"]["fallback_reason"].startswith("soft_deadline:"),
+            f"Expected fallback_reason to start with 'soft_deadline:', got {result['metadata']['fallback_reason']!r}",
+        )
+        self.assertIn("fallback_model", result["metadata"])
+        self.assertIn("fallback_elapsed_ms", result["metadata"])
+
+    def test_bundled_configs_have_direct_fallback_block(self):
+        """Both bundled config files define pipeline.direct_fallback with expected keys."""
+        from scripts.config import load_config
+
+        expected_keys = {"model", "temperature", "top_p", "max_tokens",
+                         "timeout", "retries", "delays_seconds"}
+
+        for path in ("skills/llm-fusion/assets/fusion_config.yaml",
+                     "skills/llm-fusion/assets/fusion_config.yaml.example"):
+            cfg = load_config(path)
+            fb = cfg.get("pipeline", {}).get("direct_fallback", {})
+            self.assertTrue(fb, f"{path} is missing pipeline.direct_fallback")
+            self.assertEqual(
+                set(fb.keys()),
+                expected_keys,
+                f"{path} direct_fallback keys mismatch: expected {expected_keys}, got {set(fb.keys())}",
+            )
+
 
 class TestJudge(unittest.TestCase):
     """Test llm_fusion/judge.py"""
@@ -1541,6 +1962,754 @@ class TestTierResolution(unittest.TestCase):
         # Check scenario overrides still work via new deepseek-v4-pro alias
         ds = [m for m in models if m["name"] == "deepseek-v4-pro"][0]
         self.assertIsNotNone(ds)
+
+
+# ---------------------------------------------------------------------------
+# Fallback Provider + Rate Limiter tests
+# ---------------------------------------------------------------------------
+
+
+class TestRateLimiterConcurrency(unittest.TestCase):
+    """Thread-safety tests for RateLimiter."""
+
+    def test_rate_limiter_concurrent_acquire(self):
+        """RateLimiter is safe under concurrent acquisition."""
+        from scripts.fallback import RateLimiter
+        import threading
+
+        limiter = RateLimiter(rate=1000, burst=5)
+        errors = []
+
+        def _worker():
+            for _ in range(10):
+                try:
+                    limiter.acquire(1, block=False)
+                except Exception as exc:
+                    errors.append(str(exc))
+
+        threads = [threading.Thread(target=_worker) for _ in range(20)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(errors, [], f"Concurrent acquire errors: {errors}")
+
+    def test_rate_limiter_lock_held_during_refill_only(self):
+        """RateLimiter does not hold lock while sleeping."""
+        from scripts.fallback import RateLimiter
+
+        limiter = RateLimiter(rate=100, burst=1)
+        # Exhaust the bucket
+        self.assertTrue(limiter.acquire(1, block=False))
+        self.assertFalse(limiter.acquire(1, block=False))
+        # After refill, should get a token (rate=100 → 100 tokens/s)
+        import time
+        time.sleep(0.02)  # ~2 tokens should have refilled
+        self.assertTrue(limiter.acquire(1, block=False))
+
+    def test_get_rate_limiter_reuses_instance(self):
+        """get_rate_limiter returns same instance for same settings."""
+        from scripts.fallback import get_rate_limiter
+
+        rl1 = get_rate_limiter(rate=5.0, burst=10)
+        rl2 = get_rate_limiter(rate=5.0, burst=10)
+        self.assertIs(rl1, rl2, "Same settings should return same instance")
+
+    def test_get_rate_limiter_recreates_on_change(self):
+        """get_rate_limiter creates new instance when settings change."""
+        from scripts.fallback import get_rate_limiter
+
+        rl1 = get_rate_limiter(rate=5.0, burst=10)
+        rl2 = get_rate_limiter(rate=10.0, burst=20)
+        self.assertIsNot(rl1, rl2, "Different settings should return new instance")
+
+
+class TestRetryHelpers(unittest.TestCase):
+    """Test _is_retryable_result and _compute_retry_delay."""
+
+    def test_is_retryable_success(self):
+        """Success result is not retryable."""
+        from scripts.api_client import _is_retryable_result
+        self.assertFalse(_is_retryable_result({"success": True, "http_status": 200}))
+
+    def test_is_retryable_401(self):
+        """401 is not retryable."""
+        from scripts.api_client import _is_retryable_result
+        self.assertFalse(_is_retryable_result(
+            {"success": False, "http_status": 401}
+        ))
+
+    def test_is_retryable_403(self):
+        """403 is not retryable."""
+        from scripts.api_client import _is_retryable_result
+        self.assertFalse(_is_retryable_result(
+            {"success": False, "http_status": 403}
+        ))
+
+    def test_is_retryable_429(self):
+        """429 is retryable."""
+        from scripts.api_client import _is_retryable_result
+        self.assertTrue(_is_retryable_result(
+            {"success": False, "http_status": 429}
+        ))
+
+    def test_is_retryable_500(self):
+        """500 is retryable."""
+        from scripts.api_client import _is_retryable_result
+        self.assertTrue(_is_retryable_result(
+            {"success": False, "http_status": 500}
+        ))
+
+    def test_is_retryable_502(self):
+        """502 is retryable."""
+        from scripts.api_client import _is_retryable_result
+        self.assertTrue(_is_retryable_result(
+            {"success": False, "http_status": 502}
+        ))
+
+    def test_is_retryable_503(self):
+        """503 is retryable."""
+        from scripts.api_client import _is_retryable_result
+        self.assertTrue(_is_retryable_result(
+            {"success": False, "http_status": 503}
+        ))
+
+    def test_is_retryable_504(self):
+        """504 is retryable."""
+        from scripts.api_client import _is_retryable_result
+        self.assertTrue(_is_retryable_result(
+            {"success": False, "http_status": 504}
+        ))
+
+    def test_is_retryable_400(self):
+        """400 is not retryable by default."""
+        from scripts.api_client import _is_retryable_result
+        self.assertFalse(_is_retryable_result(
+            {"success": False, "http_status": 400}
+        ))
+
+    def test_is_retryable_404(self):
+        """404 is not retryable by default."""
+        from scripts.api_client import _is_retryable_result
+        self.assertFalse(_is_retryable_result(
+            {"success": False, "http_status": 404}
+        ))
+
+    def test_is_retryable_none_status(self):
+        """None http_status (transport failure) is retryable."""
+        from scripts.api_client import _is_retryable_result
+        self.assertTrue(_is_retryable_result(
+            {"success": False, "http_status": None, "error": "Timeout"}
+        ))
+
+    def test_is_retryable_custom_sets(self):
+        """Custom retryable/non-retryable sets override defaults."""
+        from scripts.api_client import _is_retryable_result
+        # 418 not in defaults, but added to retryable → is retryable
+        self.assertTrue(_is_retryable_result(
+            {"success": False, "http_status": 418},
+            retryable_statuses={418},
+            non_retryable_statuses=set(),
+        ))
+
+    def test_compute_retry_delay_backoff(self):
+        """_compute_retry_delay computes exponential backoff for retryable statuses."""
+        from scripts.api_client import _compute_retry_delay
+        retry_policy = {
+            "backoff_enabled": True,
+            "base_delay_seconds": 1.0,
+            "max_delay_seconds": 30.0,
+            "jitter_ratio": 0.0,  # no jitter for deterministic test
+            "retryable_statuses": {429, 500},
+        }
+        result = {"http_status": 429}
+        # attempt 0: 1 * 2**0 = 1.0
+        delay = _compute_retry_delay(0, (1, 3), retry_policy, result)
+        self.assertAlmostEqual(delay, 1.0, places=5)
+        # attempt 1: 1 * 2**1 = 2.0
+        delay = _compute_retry_delay(1, (1, 3), retry_policy, result)
+        self.assertAlmostEqual(delay, 2.0, places=5)
+        # attempt 2: 1 * 2**2 = 4.0
+        delay = _compute_retry_delay(2, (1, 3), retry_policy, result)
+        self.assertAlmostEqual(delay, 4.0, places=5)
+
+    def test_compute_retry_delay_jitter(self):
+        """_compute_retry_delay applies jitter when random_func is injected."""
+        from scripts.api_client import _compute_retry_delay
+        retry_policy = {
+            "backoff_enabled": True,
+            "base_delay_seconds": 2.0,
+            "max_delay_seconds": 30.0,
+            "jitter_ratio": 0.25,
+            "retryable_statuses": {429},
+        }
+        # Inject a deterministic random that always returns +0.1
+        delay = _compute_retry_delay(
+            0, (1, 3), retry_policy, {"http_status": 429},
+            random_func=lambda a, b: 0.1,
+        )
+        # base=2, attempt=0 → 2.0 * (1 + 0.1) = 2.2
+        self.assertAlmostEqual(delay, 2.2, places=5)
+
+    def test_compute_retry_delay_capped(self):
+        """_compute_retry_delay caps at max_delay_seconds."""
+        from scripts.api_client import _compute_retry_delay
+        retry_policy = {
+            "backoff_enabled": True,
+            "base_delay_seconds": 10.0,
+            "max_delay_seconds": 15.0,
+            "jitter_ratio": 0.0,
+            "retryable_statuses": {429},
+        }
+        # attempt 3: 10 * 2**3 = 80, capped at 15
+        delay = _compute_retry_delay(
+            3, (1, 3), retry_policy, {"http_status": 429},
+        )
+        self.assertAlmostEqual(delay, 15.0, places=5)
+
+    def test_compute_retry_delay_compatibility(self):
+        """_compute_retry_delay uses delays list when backoff is disabled."""
+        from scripts.api_client import _compute_retry_delay
+        retry_policy = {
+            "backoff_enabled": False,
+            "base_delay_seconds": 1.0,
+            "max_delay_seconds": 30.0,
+            "jitter_ratio": 0.0,
+            "retryable_statuses": {429},
+        }
+        # Should use delays list
+        delay = _compute_retry_delay(0, (2, 4), retry_policy, {"http_status": 429})
+        self.assertAlmostEqual(delay, 2.0, places=5)
+        delay = _compute_retry_delay(1, (2, 4), retry_policy, {"http_status": 429})
+        self.assertAlmostEqual(delay, 4.0, places=5)
+
+    def test_compute_retry_delay_non_retryable_path(self):
+        """_compute_retry_delay uses delays list for non-retryable statuses."""
+        from scripts.api_client import _compute_retry_delay
+        retry_policy = {
+            "backoff_enabled": True,
+            "base_delay_seconds": 1.0,
+            "max_delay_seconds": 30.0,
+            "jitter_ratio": 0.0,
+            "retryable_statuses": {429, 500},
+        }
+        # 400 is not in retryable set → use delays list
+        delay = _compute_retry_delay(
+            0, (3, 5), retry_policy, {"http_status": 400},
+        )
+        self.assertAlmostEqual(delay, 3.0, places=5)
+
+
+class TestConfigResolvers(unittest.TestCase):
+    """Test config resolver helpers."""
+
+    def test_resolve_rate_limit_config_none(self):
+        """_resolve_rate_limit_config returns defaults when config is None."""
+        from scripts.api_client import _resolve_rate_limit_config
+        rl = _resolve_rate_limit_config(None)
+        self.assertTrue(rl["enabled"])
+        self.assertEqual(rl["requests_per_second"], 10.0)
+        self.assertEqual(rl["burst"], 20)
+
+    def test_resolve_rate_limit_config_full(self):
+        """_resolve_rate_limit_config reads values from config."""
+        from scripts.api_client import _resolve_rate_limit_config
+        config = {
+            "api": {
+                "rate_limit": {
+                    "enabled": False,
+                    "requests_per_second": 2.5,
+                    "burst": 3,
+                },
+            },
+        }
+        rl = _resolve_rate_limit_config(config)
+        self.assertFalse(rl["enabled"])
+        self.assertEqual(rl["requests_per_second"], 2.5)
+        self.assertEqual(rl["burst"], 3)
+
+    def test_resolve_fallback_config_none(self):
+        """_resolve_fallback_config returns disabled when config is None."""
+        from scripts.api_client import _resolve_fallback_config
+        fb = _resolve_fallback_config(None)
+        self.assertFalse(fb["enabled"])
+
+    def test_resolve_fallback_config_enabled(self):
+        """_resolve_fallback_config reads values from config."""
+        from scripts.api_client import _resolve_fallback_config
+        config = {
+            "api": {
+                "fallback": {
+                    "enabled": True,
+                    "provider": "openrouter",
+                    "endpoint": "https://test.example.com/v1",
+                },
+            },
+        }
+        fb = _resolve_fallback_config(config)
+        self.assertTrue(fb["enabled"])
+        self.assertEqual(fb["provider"], "openrouter")
+        self.assertEqual(fb["endpoint"], "https://test.example.com/v1")
+
+    def test_resolve_retry_policy_defaults(self):
+        """_resolve_retry_policy returns defaults with no config."""
+        from scripts.api_client import _resolve_retry_policy
+        rp = _resolve_retry_policy(None, None)
+        self.assertEqual(rp["max_retries"], 2)
+        self.assertTrue(rp["backoff_enabled"])
+
+    def test_resolve_retry_policy_from_config(self):
+        """_resolve_retry_policy reads from config."""
+        from scripts.api_client import _resolve_retry_policy
+        config = {
+            "api": {
+                "primary": {
+                    "retry": {
+                        "max_retries": 3,
+                        "delays_seconds": [1, 2, 4],
+                        "retryable_statuses": [429, 500],
+                        "non_retryable_statuses": [401, 403],
+                        "backoff": {
+                            "enabled": False,
+                        },
+                    },
+                },
+            },
+        }
+        rp = _resolve_retry_policy(config, None)
+        self.assertEqual(rp["max_retries"], 3)
+        self.assertFalse(rp["backoff_enabled"])
+        self.assertEqual(rp["delays"], (1, 2, 4))
+
+    def test_resolve_retry_policy_explicit_override(self):
+        """_resolve_retry_policy returns explicit retry_policy when provided."""
+        from scripts.api_client import _resolve_retry_policy
+        explicit = {"max_retries": 0, "backoff_enabled": False}
+        rp = _resolve_retry_policy({}, explicit)
+        self.assertEqual(rp["max_retries"], 0)
+        self.assertEqual(rp["backoff_enabled"], False)
+
+
+class TestRateLimitedCall(unittest.TestCase):
+    """Tests that call_llm applies rate limiting correctly."""
+
+    def test_call_llm_rate_limited(self):
+        """call_llm goes through rate limiting by default with a mock."""
+        from unittest import mock
+        from scripts.api_client import call_llm
+
+        call_count = 0
+
+        def _fake_rl_req(req, timeout=60, rate_limiter=None, enabled=True):
+            nonlocal call_count
+            call_count += 1
+            return 200, b'{"choices":[{"message":{"content":"ok"}}],"usage":{}}', None
+
+        with mock.patch(
+            "scripts.fallback.rate_limited_request",
+            side_effect=_fake_rl_req,
+        ):
+            result = call_llm(
+                "test",
+                endpoint="https://api.example.test/v1/chat/completions",
+                api_key="test-key",
+                max_tokens=100,
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(call_count, 1)
+
+
+class TestStatusAwareRetry(unittest.TestCase):
+    """Integration tests for call_llm_with_retry status-aware behavior.
+
+    These tests mock call_llm at the module level to simulate status codes
+    without network calls.
+    """
+
+    def _make_config(self, retry_cfg=None, fallback_cfg=None):
+        """Build a minimal config for testing."""
+        config = {
+            "api": {
+                "primary": {
+                    "endpoint": "http://127.0.0.1:1/nonexistent",
+                    "timeout": {
+                        "panel_floor": 2,
+                        "judge_floor": 2,
+                        "panel_throughput": 9999,
+                        "judge_throughput": 9999,
+                        "overhead_seconds": 0,
+                        "max_timeout": 300,
+                    },
+                    "retry": {
+                        "max_retries": 2,
+                        "delays_seconds": [0.01, 0.02],
+                        "retryable_statuses": [429, 500, 502, 503, 504],
+                        "non_retryable_statuses": [400, 401, 403, 404],
+                        "backoff": {"enabled": False},
+                    },
+                },
+            },
+        }
+        if retry_cfg:
+            config["api"]["primary"]["retry"].update(retry_cfg)
+        if fallback_cfg:
+            config["api"]["fallback"] = fallback_cfg
+        return config
+
+    def test_does_not_retry_401(self):
+        """call_llm_with_retry does not retry 401."""
+        from unittest import mock
+        from scripts.api_client import call_llm_with_retry
+
+        call_count = 0
+
+        def _fake_call(prompt, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return {"success": False, "http_status": 401, "error": "HTTP 401"}
+
+        config = self._make_config()
+        with mock.patch("scripts.api_client.call_llm", side_effect=_fake_call):
+            result = call_llm_with_retry(
+                "test", retries=3, delays=(0.01, 0.02), config=config,
+            )
+
+        self.assertEqual(call_count, 1, "Should only attempt once for 401")
+        self.assertFalse(result["success"])
+        self.assertEqual(result.get("retry_stopped_reason"), "non_retryable_status")
+
+    def test_does_not_retry_403(self):
+        """call_llm_with_retry does not retry 403."""
+        from unittest import mock
+        from scripts.api_client import call_llm_with_retry
+
+        call_count = 0
+
+        def _fake_call(prompt, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return {"success": False, "http_status": 403, "error": "HTTP 403"}
+
+        config = self._make_config()
+        with mock.patch("scripts.api_client.call_llm", side_effect=_fake_call):
+            result = call_llm_with_retry(
+                "test", retries=3, delays=(0.01, 0.02), config=config,
+            )
+
+        self.assertEqual(call_count, 1)
+        self.assertEqual(result.get("retry_stopped_reason"), "non_retryable_status")
+
+    def test_does_not_retry_400(self):
+        """call_llm_with_retry does not retry 400 by default."""
+        from unittest import mock
+        from scripts.api_client import call_llm_with_retry
+
+        call_count = 0
+
+        def _fake_call(prompt, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return {"success": False, "http_status": 400, "error": "HTTP 400"}
+
+        config = self._make_config()
+        with mock.patch("scripts.api_client.call_llm", side_effect=_fake_call):
+            result = call_llm_with_retry(
+                "test", retries=3, delays=(0.01, 0.02), config=config,
+            )
+
+        self.assertEqual(call_count, 1)
+
+    def test_does_not_retry_404(self):
+        """call_llm_with_retry does not retry 404 by default."""
+        from unittest import mock
+        from scripts.api_client import call_llm_with_retry
+
+        call_count = 0
+
+        def _fake_call(prompt, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return {"success": False, "http_status": 404, "error": "HTTP 404"}
+
+        config = self._make_config()
+        with mock.patch("scripts.api_client.call_llm", side_effect=_fake_call):
+            result = call_llm_with_retry(
+                "test", retries=3, delays=(0.01, 0.02), config=config,
+            )
+
+        self.assertEqual(call_count, 1)
+
+    def test_retries_429_then_succeeds(self):
+        """call_llm_with_retry retries 429 then succeeds."""
+        from unittest import mock
+        from scripts.api_client import call_llm_with_retry
+
+        call_count = 0
+        responses = [
+            {"success": False, "http_status": 429, "error": "HTTP 429"},
+            {"success": False, "http_status": 429, "error": "HTTP 429"},
+            {"success": True, "http_status": 200, "content": "ok"},
+        ]
+
+        def _fake_call(prompt, **kwargs):
+            nonlocal call_count
+            idx = call_count
+            call_count += 1
+            return responses[idx] if idx < len(responses) else responses[-1]
+
+        config = self._make_config()
+        with mock.patch("scripts.api_client.call_llm", side_effect=_fake_call), \
+             mock.patch("scripts.api_client.time.sleep"):
+            result = call_llm_with_retry(
+                "test", retries=3, delays=(0.01, 0.02), config=config,
+            )
+
+        self.assertEqual(call_count, 3)
+        self.assertTrue(result["success"])
+        self.assertEqual(result.get("retry_stopped_reason"), "success")
+
+    def test_retries_500(self):
+        """call_llm_with_retry retries 500."""
+        from unittest import mock
+        from scripts.api_client import call_llm_with_retry
+
+        call_count = 0
+
+        def _fake_call(prompt, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return {"success": False, "http_status": 500, "error": "HTTP 500"}
+            return {"success": True, "http_status": 200, "content": "ok"}
+
+        config = self._make_config()
+        with mock.patch("scripts.api_client.call_llm", side_effect=_fake_call), \
+             mock.patch("scripts.api_client.time.sleep"):
+            result = call_llm_with_retry(
+                "test", retries=3, delays=(0.01, 0.02), config=config,
+            )
+
+        self.assertEqual(call_count, 2)
+        self.assertTrue(result["success"])
+
+    def test_retries_transport_failure(self):
+        """call_llm_with_retry retries transport failures with http_status=None."""
+        from unittest import mock
+        from scripts.api_client import call_llm_with_retry
+
+        call_count = 0
+
+        def _fake_call(prompt, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return {"success": False, "http_status": None, "error": "URLError: timeout"}
+            return {"success": True, "http_status": 200, "content": "ok"}
+
+        config = self._make_config()
+        with mock.patch("scripts.api_client.call_llm", side_effect=_fake_call), \
+             mock.patch("scripts.api_client.time.sleep"):
+            result = call_llm_with_retry(
+                "test", retries=3, delays=(0.01, 0.02), config=config,
+            )
+
+        self.assertEqual(call_count, 2)
+        self.assertTrue(result["success"])
+
+    def test_fallback_disabled(self):
+        """Provider fallback is not attempted when disabled."""
+        from unittest import mock
+        from scripts.api_client import call_llm_with_retry
+
+        call_count = 0
+
+        def _fake_call(prompt, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return {"success": False, "http_status": 429, "error": "HTTP 429"}
+
+        config = self._make_config(
+            retry_cfg={"max_retries": 1},
+            fallback_cfg={"enabled": False},
+        )
+        with mock.patch("scripts.api_client.call_llm", side_effect=_fake_call), \
+             mock.patch("scripts.api_client.time.sleep"), \
+             mock.patch("scripts.api_client._attempt_provider_fallback") as mock_fb:
+            result = call_llm_with_retry(
+                "test", retries=2, delays=(0.01,), config=config,
+            )
+
+        mock_fb.assert_not_called()
+        self.assertEqual(call_count, 2)
+
+    def test_fallback_enabled_attempts_after_exhaustion(self):
+        """Provider fallback is attempted after primary retries exhausted."""
+        from unittest import mock
+        from scripts.api_client import call_llm_with_retry
+
+        def _fake_call(prompt, **kwargs):
+            return {"success": False, "http_status": 500, "error": "HTTP 500"}
+
+        def _fake_fallback(*args, **kwargs):
+            return {
+                "success": True,
+                "content": "fallback answer",
+                "http_status": 200,
+                "from_fallback": True,
+                "fallback_provider": "openrouter",
+            }
+
+        config = self._make_config(
+            retry_cfg={"max_retries": 1},
+            fallback_cfg={
+                "enabled": True,
+                "provider": "openrouter",
+                "endpoint": "https://test.example.com/v1",
+            },
+        )
+        with mock.patch("scripts.api_client.call_llm", side_effect=_fake_call), \
+             mock.patch("scripts.api_client.time.sleep"), \
+             mock.patch(
+                 "scripts.api_client._attempt_provider_fallback",
+                 side_effect=_fake_fallback,
+             ) as mock_fb:
+            result = call_llm_with_retry(
+                "test", retries=2, delays=(0.01,), config=config,
+            )
+
+        mock_fb.assert_called_once()
+        self.assertTrue(result["success"])
+        self.assertTrue(result.get("from_fallback"))
+        self.assertEqual(result.get("fallback_provider"), "openrouter")
+
+    def test_fallback_skipped_for_401(self):
+        """Provider fallback is not attempted after 401."""
+        from unittest import mock
+        from scripts.api_client import call_llm_with_retry
+
+        def _fake_call(prompt, **kwargs):
+            return {"success": False, "http_status": 401, "error": "HTTP 401"}
+
+        config = self._make_config(
+            retry_cfg={"max_retries": 1},
+            fallback_cfg={"enabled": True, "provider": "openrouter"},
+        )
+        with mock.patch("scripts.api_client.call_llm", side_effect=_fake_call), \
+             mock.patch("scripts.api_client.time.sleep"), \
+             mock.patch(
+                 "scripts.api_client._attempt_provider_fallback",
+             ) as mock_fb:
+            result = call_llm_with_retry(
+                "test", retries=2, delays=(0.01,), config=config,
+            )
+
+        mock_fb.assert_not_called()
+        self.assertFalse(result["success"])
+        self.assertTrue(result.get("fallback_skipped"))
+
+    def test_fallback_skipped_for_403(self):
+        """Provider fallback is not attempted after 403."""
+        from unittest import mock
+        from scripts.api_client import call_llm_with_retry
+
+        def _fake_call(prompt, **kwargs):
+            return {"success": False, "http_status": 403, "error": "HTTP 403"}
+
+        config = self._make_config(
+            retry_cfg={"max_retries": 1},
+            fallback_cfg={"enabled": True, "provider": "openrouter"},
+        )
+        with mock.patch("scripts.api_client.call_llm", side_effect=_fake_call), \
+             mock.patch("scripts.api_client.time.sleep"), \
+             mock.patch(
+                 "scripts.api_client._attempt_provider_fallback",
+             ) as mock_fb:
+            result = call_llm_with_retry(
+                "test", retries=2, delays=(0.01,), config=config,
+            )
+
+        mock_fb.assert_not_called()
+        self.assertFalse(result["success"])
+        self.assertTrue(result.get("fallback_skipped"))
+
+
+class TestConfigSmokeFallbackRateLimit(unittest.TestCase):
+    """Verify the bundled configs contain the expected new keys."""
+
+    def test_bundled_configs_have_rate_limit_keys(self):
+        """Both bundled configs have api.rate_limit with expected keys."""
+        from scripts.config import load_config
+
+        expected_keys = {"enabled", "requests_per_second", "burst"}
+
+        for path in (
+            "skills/llm-fusion/assets/fusion_config.yaml",
+            "skills/llm-fusion/assets/fusion_config.yaml.example",
+        ):
+            cfg = load_config(path)
+            rl = cfg.get("api", {}).get("rate_limit", {})
+            self.assertTrue(rl, f"{path} is missing api.rate_limit")
+            self.assertIn("enabled", rl, f"{path}")
+            self.assertIn("requests_per_second", rl, f"{path}")
+            self.assertIn("burst", rl, f"{path}")
+            self.assertEqual(set(rl.keys()), expected_keys,
+                             f"{path} rate_limit keys mismatch")
+
+    def test_bundled_configs_have_fallback_keys(self):
+        """Both bundled configs have api.fallback with expected keys."""
+        from scripts.config import load_config
+
+        expected_keys = {"enabled", "provider", "endpoint"}
+
+        for path in (
+            "skills/llm-fusion/assets/fusion_config.yaml",
+            "skills/llm-fusion/assets/fusion_config.yaml.example",
+        ):
+            cfg = load_config(path)
+            fb = cfg.get("api", {}).get("fallback", {})
+            self.assertTrue(fb, f"{path} is missing api.fallback")
+            self.assertEqual(set(fb.keys()), expected_keys,
+                             f"{path} fallback keys mismatch")
+            self.assertFalse(fb["enabled"],
+                             f"{path} fallback should be disabled by default")
+
+    def test_bundled_configs_have_retry_status_keys(self):
+        """Both bundled configs have retryable/non-retryable status lists."""
+        from scripts.config import load_config
+
+        for path in (
+            "skills/llm-fusion/assets/fusion_config.yaml",
+            "skills/llm-fusion/assets/fusion_config.yaml.example",
+        ):
+            cfg = load_config(path)
+            retry = cfg.get("api", {}).get("primary", {}).get("retry", {})
+            self.assertIn("retryable_statuses", retry, f"{path}")
+            self.assertIn("non_retryable_statuses", retry, f"{path}")
+            self.assertEqual(set(retry["retryable_statuses"]), {429, 500, 502, 503, 504},
+                             f"{path}")
+            self.assertEqual(set(retry["non_retryable_statuses"]), {400, 401, 403, 404},
+                             f"{path}")
+
+    def test_bundled_configs_have_backoff_keys(self):
+        """Both bundled configs have api.primary.retry.backoff sub-section."""
+        from scripts.config import load_config
+
+        expected_keys = {"enabled", "base_delay_seconds",
+                         "max_delay_seconds", "jitter_ratio"}
+
+        for path in (
+            "skills/llm-fusion/assets/fusion_config.yaml",
+            "skills/llm-fusion/assets/fusion_config.yaml.example",
+        ):
+            cfg = load_config(path)
+            backoff = cfg.get("api", {}).get("primary", {}).get("retry", {}).get("backoff", {})
+            self.assertTrue(backoff, f"{path} is missing backoff block")
+            self.assertEqual(set(backoff.keys()), expected_keys,
+                             f"{path} backoff keys mismatch")
+            self.assertTrue(backoff["enabled"],
+                            f"{path} backoff should be enabled by default")
 
 
 if __name__ == "__main__":

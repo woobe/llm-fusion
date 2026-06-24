@@ -324,6 +324,7 @@ def _llm_classifier(query, config):
             top_p=1.0,
             max_completion_tokens=max_tokens,
             timeout=cls_timeout,
+            config=config,
         )
 
         if result["success"] and result["content"]:
