@@ -78,6 +78,8 @@ fusion:
           max_tokens: 2000
       judge:
         stages: two
+        max_panel_response_chars: 2000
+        stage2_include_raw_responses: false
         stage1:
           max_tokens: 6144
         stage2:
@@ -103,6 +105,8 @@ fusion:
           max_tokens: 2500
       judge:
         stages: two
+        max_panel_response_chars: 2500
+        stage2_include_raw_responses: false
         stage1:
           max_tokens: 6144
         stage2:
@@ -127,6 +131,8 @@ fusion:
           max_tokens: 2000
       judge:
         stages: two
+        max_panel_response_chars: 2000
+        stage2_include_raw_responses: false
         stage1:
           max_tokens: 6144
         stage2:
@@ -141,6 +147,8 @@ fusion:
           max_tokens: 3000
       judge:
         stages: two
+        max_panel_response_chars: 3000
+        stage2_include_raw_responses: false
         stage1:
           max_tokens: 6144
         stage2:

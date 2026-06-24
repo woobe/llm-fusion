@@ -1769,6 +1769,302 @@ class TestJudge(unittest.TestCase):
         self.assertNotIn("max_tokens", captured)
         self.assertNotIn("extra_params", captured)
 
+    # ------------------------------------------------------------------ #
+    # Two-stage judge token reduction tests
+    # ------------------------------------------------------------------ #
+
+    def test_two_stage_no_raw_responses_omits_responses_section(self):
+        """stage2_include_raw_responses=false omits responses from stage2 prompt."""
+        from unittest import mock
+        from scripts.judge import judge_two_stage
+
+        captured_prompts = []
+        call_count = [0]
+
+        def _fake_call(**kwargs):
+            call_count[0] += 1
+            prompt = kwargs.get("prompt", "")
+            captured_prompts.append(prompt)
+            if call_count[0] == 1:
+                return {"success": True, "content": "Stage 1 analysis here",
+                        "reasoning_content": None, "usage": {}, "error": None}
+            return {"success": True, "content": "Final answer",
+                    "reasoning_content": None, "usage": {}, "error": None}
+
+        responses = [
+            {"label": "Model-A", "cleaned_content": "Answer from model A"},
+            {"label": "Model-B", "cleaned_content": "Answer from model B"},
+        ]
+
+        with mock.patch("scripts.judge.call_llm_with_retry", side_effect=_fake_call):
+            result = judge_two_stage(
+                "What is 2+2?",
+                responses,
+                "bugfix",
+                config={"api": {"primary": {"timeout": {"judge_floor": 2}}}},
+                judge_config={
+                    "model": "mimo-v2.5",
+                    "temp": 1.0,
+                    "top_p": 0.95,
+                    "max_tokens": 2048,
+                    "thinking": {"type": "enabled"},
+                    "stage1": {},
+                    "stage2": {},
+                    "stage2_include_raw_responses": False,
+                },
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(len(captured_prompts), 2)
+        # Stage 1 prompt should contain responses
+        self.assertIn("Model-A", captured_prompts[0])
+        self.assertIn("Model-B", captured_prompts[0])
+        # Stage 2 prompt should NOT contain raw responses
+        self.assertNotIn("Model-A", captured_prompts[1])
+        self.assertNotIn("Model-B", captured_prompts[1])
+        # Stage 2 prompt should contain the stage 1 analysis
+        self.assertIn("Stage 1 analysis here", captured_prompts[1])
+
+    def test_two_stage_with_raw_responses_includes_when_explicit(self):
+        """stage2_include_raw_responses=true includes responses in stage2; absent (default false) excludes them."""
+        from unittest import mock
+        from scripts.judge import judge_two_stage
+
+        captured_prompts = []
+        call_count = [0]
+
+        def _fake_call(**kwargs):
+            call_count[0] += 1
+            prompt = kwargs.get("prompt", "")
+            captured_prompts.append(prompt)
+            if call_count[0] == 1:
+                return {"success": True, "content": "analysis",
+                        "reasoning_content": None, "usage": {}, "error": None}
+            return {"success": True, "content": "final",
+                    "reasoning_content": None, "usage": {}, "error": None}
+
+        responses = [{"label": "X", "cleaned_content": "content X"}]
+
+        # Test with explicit true
+        with mock.patch("scripts.judge.call_llm_with_retry", side_effect=_fake_call):
+            result = judge_two_stage(
+                "test query", responses, "bugfix",
+                config={"api": {"primary": {"timeout": {"judge_floor": 2}}}},
+                judge_config={
+                    "model": "mimo-v2.5", "temp": 1.0, "top_p": 0.95,
+                    "max_tokens": 2048, "thinking": {"type": "enabled"},
+                    "stage1": {}, "stage2": {},
+                    "stage2_include_raw_responses": True,
+                },
+            )
+
+        self.assertTrue(result["success"])
+        # Both prompts should contain responses
+        self.assertIn("content X", captured_prompts[0])
+        self.assertIn("content X", captured_prompts[1])
+
+        # Also test with key absent (defaults to false — optimization)
+        captured_prompts.clear()
+        call_count[0] = 0
+
+        with mock.patch("scripts.judge.call_llm_with_retry", side_effect=_fake_call):
+            result = judge_two_stage(
+                "test query", responses, "bugfix",
+                config={"api": {"primary": {"timeout": {"judge_floor": 2}}}},
+                judge_config={
+                    "model": "mimo-v2.5", "temp": 1.0, "top_p": 0.95,
+                    "max_tokens": 2048, "thinking": {"type": "enabled"},
+                    "stage1": {}, "stage2": {},
+                },
+            )
+
+        self.assertTrue(result["success"])
+        # Stage 1 should have responses
+        self.assertIn("content X", captured_prompts[0])
+        # Stage 2 should NOT have responses (default false)
+        self.assertNotIn("content X", captured_prompts[1])
+
+    def test_two_stage_metadata_fields_populated(self):
+        """Stage input char metadata is populated in result dict."""
+        from unittest import mock
+        from scripts.judge import judge_two_stage
+
+        def _fake_call(**kwargs):
+            return {"success": True, "content": "analysis result",
+                    "reasoning_content": None, "usage": {}, "error": None}
+
+        responses = [
+            {"label": "A", "cleaned_content": "Short answer"},
+            {"label": "B", "cleaned_content": "Another short answer"},
+        ]
+
+        with mock.patch("scripts.judge.call_llm_with_retry", side_effect=_fake_call):
+            result = judge_two_stage(
+                "test query", responses, "bugfix",
+                config={"api": {"primary": {"timeout": {"judge_floor": 2}}}},
+                judge_config={
+                    "model": "mimo-v2.5", "temp": 1.0, "top_p": 0.95,
+                    "max_tokens": 2048, "thinking": {"type": "enabled"},
+                    "stage1": {}, "stage2": {},
+                },
+            )
+
+        self.assertIn("stage1_input_chars", result)
+        self.assertIn("stage2_input_chars", result)
+        self.assertIsInstance(result["stage1_input_chars"], int)
+        self.assertIsInstance(result["stage2_input_chars"], int)
+        self.assertGreater(result["stage1_input_chars"], 0)
+        self.assertGreater(result["stage2_input_chars"], 0)
+        # Check truncation metadata (no truncation in this test)
+        self.assertIn("panel_response_truncated_count", result)
+        self.assertIn("panel_response_truncated_chars", result)
+        self.assertIn("max_panel_response_chars", result)
+        self.assertIn("stage2_include_raw_responses", result)
+        self.assertEqual(result["panel_response_truncated_count"], 0)
+        self.assertEqual(result["panel_response_truncated_chars"], 0)
+        self.assertIsNone(result["max_panel_response_chars"])
+        self.assertFalse(result["stage2_include_raw_responses"])
+
+    def test_max_panel_response_chars_truncation_two_stage(self):
+        """max_panel_response_chars truncates responses in both stage prompts."""
+        from unittest import mock
+        from scripts.judge import judge_two_stage
+
+        captured_prompts = []
+        call_count = [0]
+
+        def _fake_call(**kwargs):
+            call_count[0] += 1
+            captured_prompts.append(kwargs.get("prompt", ""))
+            if call_count[0] == 1:
+                return {"success": True, "content": "analysis",
+                        "reasoning_content": None, "usage": {}, "error": None}
+            return {"success": True, "content": "final",
+                    "reasoning_content": None, "usage": {}, "error": None}
+
+        long_content = "A" * 5000
+        responses = [{"label": "Long", "cleaned_content": long_content}]
+
+        with mock.patch("scripts.judge.call_llm_with_retry", side_effect=_fake_call):
+            result = judge_two_stage(
+                "test", responses, "bugfix",
+                config={"api": {"primary": {"timeout": {"judge_floor": 2}}}},
+                judge_config={
+                    "model": "mimo-v2.5", "temp": 1.0, "top_p": 0.95,
+                    "max_tokens": 2048, "thinking": {"type": "enabled"},
+                    "stage1": {}, "stage2": {},
+                    "max_panel_response_chars": 1000,
+                },
+            )
+
+        self.assertTrue(result["success"])
+        # Stage 1 prompt should have truncated content
+        self.assertIn("[truncated to first 1000 chars]", captured_prompts[0])
+        self.assertNotIn("A" * 1001, captured_prompts[0])
+        # Check truncation metadata
+        self.assertEqual(result["panel_response_truncated_count"], 1)
+        self.assertGreaterEqual(result["panel_response_truncated_chars"], 4000)
+        self.assertEqual(result["max_panel_response_chars"], 1000)
+
+    def test_two_stage_truncation_stats_no_truncation(self):
+        """When no truncation occurs, metadata shows zero truncation."""
+        from unittest import mock
+        from scripts.judge import judge_two_stage
+
+        def _fake_call(**kwargs):
+            return {"success": True, "content": "analysis",
+                    "reasoning_content": None, "usage": {}, "error": None}
+
+        with mock.patch("scripts.judge.call_llm_with_retry", side_effect=_fake_call):
+            result = judge_two_stage(
+                "query", [{"label": "A", "cleaned_content": "short"}], "bugfix",
+                config={"api": {"primary": {"timeout": {"judge_floor": 2}}}},
+                judge_config={
+                    "model": "mimo-v2.5", "temp": 1.0, "top_p": 0.95,
+                    "max_tokens": 2048, "thinking": {"type": "enabled"},
+                    "stage1": {}, "stage2": {},
+                    "max_panel_response_chars": 5000,
+                },
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["panel_response_truncated_count"], 0)
+        self.assertEqual(result["panel_response_truncated_chars"], 0)
+        self.assertEqual(result["max_panel_response_chars"], 5000)
+
+    def test_two_stage_evidence_bundle_in_stage1_prompt(self):
+        """Stage 1 prompt includes evidence bundle instructions in the user prompt."""
+        from unittest import mock
+        from scripts.judge import judge_two_stage
+
+        captured_prompts = []
+
+        def _fake_call(**kwargs):
+            captured_prompts.append(kwargs.get("prompt", ""))
+            return {"success": True, "content": "analysis",
+                    "reasoning_content": None, "usage": {}, "error": None}
+
+        with mock.patch("scripts.judge.call_llm_with_retry", side_effect=_fake_call):
+            judge_two_stage(
+                "test", [{"label": "A", "cleaned_content": "test content"}], "bugfix",
+                config={"api": {"primary": {"timeout": {"judge_floor": 2}}}},
+                judge_config={
+                    "model": "mimo-v2.5", "temp": 1.0, "top_p": 0.95,
+                    "max_tokens": 2048, "thinking": {"type": "enabled"},
+                    "stage1": {}, "stage2": {},
+                },
+            )
+
+        self.assertGreater(len(captured_prompts), 0)
+        stage1_prompt = captured_prompts[0]
+        # Evidence bundle instructions should be in the stage 1 user prompt
+        self.assertIn("compact evidence bundle", stage1_prompt.lower())
+        self.assertIn("produce a compact evidence bundle", stage1_prompt.lower())
+
+    def test_two_stage_stage2_excludes_responses_by_default(self):
+        """Without stage2_include_raw_responses, stage2 prompt omits raw responses."""
+        from unittest import mock
+        from scripts.judge import judge_two_stage
+
+        captured_prompts = []
+        call_count = [0]
+
+        def _fake_call(**kwargs):
+            call_count[0] += 1
+            captured_prompts.append(kwargs.get("prompt", ""))
+            if call_count[0] == 1:
+                return {"success": True, "content": "analysis",
+                        "reasoning_content": None, "usage": {}, "error": None}
+            return {"success": True, "content": "final",
+                    "reasoning_content": None, "usage": {}, "error": None}
+
+        responses = [
+            {"label": "A", "cleaned_content": "Some long analysis response here"},
+            {"label": "B", "cleaned_content": "Another model analysis here"},
+        ]
+
+        with mock.patch("scripts.judge.call_llm_with_retry", side_effect=_fake_call):
+            result = judge_two_stage(
+                "test query", responses, "bugfix",
+                config={"api": {"primary": {"timeout": {"judge_floor": 2}}}},
+                judge_config={
+                    "model": "mimo-v2.5", "temp": 1.0, "top_p": 0.95,
+                    "max_tokens": 2048, "thinking": {"type": "enabled"},
+                    "stage1": {}, "stage2": {},
+                },
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(len(captured_prompts), 2)
+        # Stage 1 has raw responses
+        self.assertIn("Some long analysis response here", captured_prompts[0])
+        # Stage 2 does NOT have raw responses by default
+        self.assertNotIn("Some long analysis response here", captured_prompts[1])
+        # Stage 2 should still have the analysis
+        self.assertIn("analysis", captured_prompts[1])
+        # Metadata confirms default
+        self.assertFalse(result["stage2_include_raw_responses"])
+
 
 class TestSkillHandler(unittest.TestCase):
     """Test llm_fusion/skill_handler.py"""

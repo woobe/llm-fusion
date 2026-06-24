@@ -448,16 +448,31 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
                         "reasoning_mode", judge_config.get("reasoning_mode")
                     ),
                     "stage2_thinking": stage2_cfg.get("thinking", judge_config.get("thinking")),
+                    "stage2_include_raw_responses": judge_config.get(
+                        "stage2_include_raw_responses", False
+                    ),
+                    "max_panel_response_chars": judge_config.get("max_panel_response_chars"),
                 },
                 "stage1": {
                     "success": judge_result.get("stage1", {}).get("success"),
                     "usage": judge_result.get("stage1", {}).get("usage"),
                     "elapsed": judge_result.get("stage1", {}).get("elapsed", 0),
+                    "input_chars": judge_result.get("stage1_input_chars", 0),
+                    "panel_response_truncated_count": judge_result.get(
+                        "panel_response_truncated_count", 0
+                    ),
+                    "panel_response_truncated_chars": judge_result.get(
+                        "panel_response_truncated_chars", 0
+                    ),
                 },
                 "stage2": {
                     "success": judge_result.get("stage2", {}).get("success"),
                     "usage": judge_result.get("stage2", {}).get("usage"),
                     "elapsed": judge_result.get("stage2", {}).get("elapsed", 0),
+                    "input_chars": judge_result.get("stage2_input_chars", 0),
+                    "include_raw_responses": judge_result.get(
+                        "stage2_include_raw_responses", False
+                    ),
                 },
             }
         else:

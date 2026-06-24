@@ -267,7 +267,19 @@ user query
 
 ## Changelog
 
-### v0.2.11 (current)
+### v0.2.12 (current)
+- **Two-Stage Judge Token Reduction** — stage 2 now receives compact evidence bundle only (not raw panel responses)
+  - New `_evidence_bundle_instructions()` helper structures stage 1 output (verdict, key_findings, contradictions, best_evidence, synthesis_plan)
+  - `stage2_include_raw_responses` config flag (default: `false`) — opt in with `true` for full replay
+  - `_build_responses_section()` supports `return_stats=True` for truncation counting
+  - `max_panel_response_chars` defaults per two-stage scenario: bugfix=2000, plan_review=2500, reasoning=2000, document=3000
+  - Metadata: `stage1_input_chars`, `stage2_input_chars`, `panel_response_truncated_count`, `panel_response_truncated_chars`
+  - Saves ~3,000 tokens per two-stage judge call
+  - Config keys added to both bundled configs
+  - 8 new tests (7 judge + 1 pipeline metadata)
+  - 241 tests passing (was 234)
+
+### v0.2.11
 - **Panel Early Quorum & Cancellation** — `dispatch_panel()` returns early once `min_survivors` responses collected
   - New `_resolve_panel_quorum()` helper derives quorum = min(total_calls, pipeline.min_survivors)
   - Pending futures cancelled, in-flight results discarded

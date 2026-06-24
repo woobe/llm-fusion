@@ -82,6 +82,66 @@ JUDGE_SYSTEM_PROMPTS_SINGLE = {
     ),
 }
 
+def _evidence_bundle_instructions(scenario_id):
+    """Return shared evidence-bundle formatting instructions for stage 1.
+
+    Appended to the scenario-specific stage 1 system prompt to ensure the
+    model produces a compact, structured bundle that stage 2 can consume
+    without needing the raw panel responses.
+    """
+    scenario_fields = {
+        "bugfix": (
+            "Include these scenario-specific fields in your bundle:\n"
+            "- root_cause: the definitive root cause\n"
+            "- fix_strategy: the recommended approach\n"
+            "- affected_area: which files/functions are affected\n"
+            "- edge_cases: edge cases that must be handled"
+        ),
+        "plan_review": (
+            "Include these scenario-specific fields in your bundle:\n"
+            "- overall_assessment: summary verdict\n"
+            "- critical_issues: prioritized issues\n"
+            "- tradeoffs: design trade-offs noted\n"
+            "- gaps: what the plan is missing\n"
+            "- action_items: prioritized recommended changes"
+        ),
+        "reasoning": (
+            "Include these scenario-specific fields in your bundle:\n"
+            "- verified_steps: steps that are correct\n"
+            "- wrong_steps: steps that contain errors\n"
+            "- correct_path: the correct reasoning path\n"
+            "- final_answer_constraints: constraints for the solution"
+        ),
+        "document": (
+            "Include these scenario-specific fields in your bundle:\n"
+            "- required_changes: changes needed\n"
+            "- section_findings: findings per section\n"
+            "- severity_groups: issues grouped by severity (Critical / Important / Minor)\n"
+            "- rewrite_plan: ordered rewrite steps"
+        ),
+    }
+    extra = scenario_fields.get(scenario_id, "")
+    return (
+        "\n\n"
+        "Output your analysis as a compact EVIDENCE_BUNDLE with the following structure:\n"
+        "EVIDENCE_BUNDLE\n"
+        "verdict: <1-3 sentence synthesis direction>\n"
+        "key_findings:\n"
+        "- <up to 8 bullets; each includes response labels>\n"
+        "contradictions:\n"
+        "- <up to 5 bullets; include resolution or uncertainty>\n"
+        "best_evidence:\n"
+        "- <up to 6 short snippets or paraphrases; each <= 240 chars; include response label>\n"
+        "missing_or_uncertain:\n"
+        "- <up to 5 bullets>\n"
+        "final_synthesis_plan:\n"
+        "- <up to 6 ordered bullets for stage 2>\n"
+        f"{extra}\n\n"
+        "Be concise. Do not quote long raw passages — reference response labels. "
+        "This bundle is the only default input to the synthesis stage."
+    )
+
+
 # Two-stage prompts (Stage 1 — Analysis)
 JUDGE_SYSTEM_PROMPTS_STAGE1 = {
     "bugfix": (
@@ -95,8 +155,9 @@ JUDGE_SYSTEM_PROMPTS_STAGE1 = {
         "5. MISSING INSIGHTS: Anything important that no panel response covered\n"
         "6. FIX STRATEGY: The recommended approach to fix (high-level, before code)\n\n"
         "Be thorough and precise. This analysis will be passed to a synthesis stage."
-    ),
-    "plan_review": (
+        + _evidence_bundle_instructions("bugfix")
+        ),
+        "plan_review": (
         "You are an architecture and plan review analyst. You receive multiple independent "
         "reviews of the same plan/design/architecture proposal. Produce a structured comparative analysis.\n\n"
         "Output structure:\n"
@@ -108,8 +169,9 @@ JUDGE_SYSTEM_PROMPTS_STAGE1 = {
         "6. ACTION ITEMS: Prioritized list of recommended changes\n\n"
         "For each point, note which panel responses contributed the insight. Be thorough \u2014 this "
         "analysis will be used to produce the final synthesized review."
-    ),
-    "reasoning": (
+        + _evidence_bundle_instructions("plan_review")
+        ),
+        "reasoning": (
         "You are a reasoning verification expert. You receive multiple independent solutions "
         "to a multi-step reasoning problem. Your job is to verify every step and identify errors.\n\n"
         "For each step in the problem:\n"
@@ -122,8 +184,9 @@ JUDGE_SYSTEM_PROMPTS_STAGE1 = {
         "- Missing steps that no response covered\n"
         "- Alternative valid approaches\n\n"
         "Output a step-by-step verification table. Be precise and thorough."
-    ),
-    "document": (
+        + _evidence_bundle_instructions("reasoning")
+        ),
+        "document": (
         "You are a document review analyst. You receive multiple independent reviews "
         "of the same document. Produce a structured comparative analysis.\n\n"
         "Cover these dimensions for each section of the document:\n"
@@ -135,7 +198,8 @@ JUDGE_SYSTEM_PROMPTS_STAGE1 = {
         "6. SPECIFIC ISSUES: Line-level or section-level problems identified\n\n"
         "Group findings by severity: Critical / Important / Minor.\n"
         "Note which panel responses identified each issue."
-    ),
+        + _evidence_bundle_instructions("document")
+        ),
 }
 
 # Two-stage prompts (Stage 2 — Synthesis)
@@ -143,7 +207,7 @@ JUDGE_SYSTEM_PROMPTS_STAGE2 = {
     "bugfix": (
         "You are a code fix synthesis expert. You receive:\n"
         "1. The original bug report\n"
-        "2. Independent bug analyses from multiple models\n"
+        "2. Independent bug analyses from multiple models (or a compact evidence bundle)\n"
         "3. A definitive root cause analysis\n\n"
         "Your job is to produce the definitive fix.\n\n"
         "Produce:\n"
@@ -156,7 +220,7 @@ JUDGE_SYSTEM_PROMPTS_STAGE2 = {
     "plan_review": (
         "You are a plan review synthesis expert. You receive:\n"
         "1. The original plan/proposal\n"
-        "2. Multiple independent reviews from different models\n"
+        "2. Multiple independent reviews from different models (or a compact evidence bundle)\n"
         "3. A structured comparative analysis\n\n"
         "Produce a definitive, well-organized review that:\n"
         "- Is comprehensive yet readable\n"
@@ -169,7 +233,7 @@ JUDGE_SYSTEM_PROMPTS_STAGE2 = {
     "reasoning": (
         "You are a reasoning synthesis expert. You receive:\n"
         "1. The original multi-step problem\n"
-        "2. Multiple independent solutions\n"
+        "2. Multiple independent solutions (or a compact evidence bundle)\n"
         "3. A step-by-step verification analysis\n\n"
         "Produce the definitive solution that:\n"
         "- Shows EVERY step with explicit reasoning\n"
@@ -182,7 +246,7 @@ JUDGE_SYSTEM_PROMPTS_STAGE2 = {
     "document": (
         "You are a document improvement synthesis expert. You receive:\n"
         "1. The original document\n"
-        "2. Multiple independent reviews\n"
+        "2. Multiple independent reviews (or a compact evidence bundle)\n"
         "3. A structured issues analysis\n\n"
         "Produce the definitive improved version of the document. Include:\n"
         "1. SUMMARY OF CHANGES: What you changed and why\n"
@@ -192,7 +256,6 @@ JUDGE_SYSTEM_PROMPTS_STAGE2 = {
         "Use the original document as the base and apply the best suggestions from all reviews."
     ),
 }
-
 
 def _merge_judge_call_config(judge_config, stage_config=None):
     """Merge top-level judge config with an optional stage override.
@@ -446,6 +509,8 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
         usage : dict (combined)
         error : str or None
         elapsed : float
+        stage1_input_chars : int (character count of stage 1 prompt)
+        stage2_input_chars : int (character count of stage 2 prompt)
     Never raises.
     """
     result = {
@@ -457,6 +522,8 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
         "usage": {},
         "error": None,
         "elapsed": 0.0,
+        "stage1_input_chars": 0,
+        "stage2_input_chars": 0,
     }
 
     import time
@@ -488,9 +555,18 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
         judge_retries = retry_cfg.get("max_retries", 2)
         judge_delays = retry_cfg.get("delays_seconds", [1, 3])
 
-    # Build responses section with optional truncation
+    # Build responses section with optional truncation and stats
     max_chars = judge_config.get("max_panel_response_chars")
-    responses_section = _build_responses_section(responses, max_chars=max_chars)
+    responses_section, response_stats = _build_responses_section(
+        responses, max_chars=max_chars, return_stats=True
+    )
+    include_responses_in_stage2 = judge_config.get("stage2_include_raw_responses", False)
+
+    # Populate truncation metadata
+    result["panel_response_truncated_count"] = response_stats["truncated_response_count"]
+    result["panel_response_truncated_chars"] = response_stats["truncated_chars"]
+    result["max_panel_response_chars"] = response_stats["max_panel_response_chars"]
+    result["stage2_include_raw_responses"] = include_responses_in_stage2
 
     # --- Stage 1: Analysis ---
     stage1_system = JUDGE_SYSTEM_PROMPTS_STAGE1.get(
@@ -501,11 +577,13 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
     stage1_prompt = (
         f"Original query: {query}\n\n"
         f"Below are {len(responses)} independent analyses from different models. "
-        f"Produce a structured comparative analysis.\n\n"
+        f"Produce a compact evidence bundle.\n\n"
         f"{responses_section}\n\n"
-        f"Produce your structured analysis now. Be thorough and specific — "
-        f"this will be used as input to the synthesis stage."
+        f"Analyze these responses and produce a compact evidence bundle "
+        f"for the synthesis stage. Be concise and structured."
     )
+
+    result["stage1_input_chars"] = len(stage1_prompt)
 
     stage1_call_config = _merge_judge_call_config(judge_config, stage1_config)
     stage1_kwargs = _build_judge_llm_kwargs(
@@ -550,14 +628,24 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
         "You are a synthesis expert. Synthesize the final answer based on the analysis provided.",
     )
 
-    stage2_prompt = (
-        f"Original query: {query}\n\n"
-        f"Below are {len(responses)} independent responses from different models.\n\n"
-        f"{responses_section}\n\n"
-        f"Below is a structured analysis of these responses:\n\n"
-        f"{stage1_content}\n\n"
-        f"Synthesize the definitive final answer. Be thorough — this is the output the user will see."
-    )
+    if include_responses_in_stage2:
+        stage2_prompt = (
+            f"Original query: {query}\n\n"
+            f"Below are {len(responses)} independent responses from different models.\n\n"
+            f"{responses_section}\n\n"
+            f"Below is a structured analysis of these responses:\n\n"
+            f"{stage1_content}\n\n"
+            f"Synthesize the definitive final answer. Be thorough — this is the output the user will see."
+        )
+    else:
+        stage2_prompt = (
+            f"Original query: {query}\n\n"
+            f"Below is a structured analysis of the responses:\n\n"
+            f"{stage1_content}\n\n"
+            f"Synthesize the definitive final answer. Be thorough — this is the output the user will see."
+        )
+
+    result["stage2_input_chars"] = len(stage2_prompt)
 
     stage2_call_config = _merge_judge_call_config(judge_config, stage2_config)
     stage2_kwargs = _build_judge_llm_kwargs(
@@ -604,21 +692,43 @@ def judge_two_stage(query, responses, scenario_id, config=None, judge_config=Non
     return result
 
 
-def _build_responses_section(responses, max_chars=None):
+def _build_responses_section(responses, max_chars=None, return_stats=False):
     """Build the '=== Label ===\nContent\n' section for judge prompts.
 
     If *max_chars* is set, each response's content is truncated to that many
     characters (with a truncation notice appended) to keep the judge prompt
     within a reasonable size.
+
+    When *return_stats* is True, returns ``(section, stats)`` where *stats* is
+    a dict with keys: *response_count*, *included_response_count*,
+    *truncated_response_count*, *truncated_chars*, *max_panel_response_chars*.
+    When *return_stats* is False (default), returns only the section string
+    for backward compatibility.
     """
     parts = []
+    response_count = len(responses)
+    truncated_count = 0
+    truncated_chars = 0
     for resp in responses:
         label = resp.get("label", "Response")
         content = resp.get("cleaned_content") or resp.get("content", "")
         if content:
-            if max_chars is not None and len(content) > max_chars:
+            original_len = len(content)
+            if max_chars is not None and original_len > max_chars:
+                truncated_count += 1
+                truncated_chars += original_len - max_chars
                 content = content[:max_chars] + "\n\n[truncated to first {} chars]".format(max_chars)
             parts.append(f"=== {label} ===\n{content}")
     if not parts:
         parts.append("(no valid responses)")
-    return "\n\n".join(parts)
+    section = "\n\n".join(parts)
+    if return_stats:
+        stats = {
+            "response_count": response_count,
+            "included_response_count": len(parts) if parts != ["(no valid responses)"] else 0,
+            "truncated_response_count": truncated_count,
+            "truncated_chars": truncated_chars,
+            "max_panel_response_chars": max_chars,
+        }
+        return section, stats
+    return section
