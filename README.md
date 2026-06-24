@@ -267,7 +267,23 @@ user query
 
 ## Changelog
 
-### v0.2.15 (current)
+### v0.2.16 (current)
+- **Per-Tier Panel Quorum & Min Survivors** — tier-specific early-exit and failure thresholds
+  - New `pipeline.quorum_by_tier` config: controls early-exit per tier
+    - low1: 2 (all needed), low2/low3: 0 (wait for all), medium/high: 3 (all needed)
+  - New `pipeline.min_survivors_by_tier` config: controls failure threshold per tier
+    - low1: 2, low2: 3 (1 failure), low3: 5 (1 failure), medium/high: 3 (0 failures)
+  - `_resolve_panel_quorum(config, total_calls, tier=None)` — checks `quorum_by_tier[tier]` first
+  - New `_resolve_min_survivors(config, tier=None)` — checks `min_survivors_by_tier[tier]` first
+  - Both resolvers fall back to `min_survivors` for backward compatibility
+  - `dispatch_panel()` now passes tier to both resolvers
+  - Pipeline post-cleaning survivor check uses tier-specific threshold
+  - Quorum=0 disables early exit — panel runs until all calls finish or timeout
+  - Future-proof: adding models to medium/high tiers works with quorum=3, min=3
+  - Tests: per-tier quorum, per-tier min survivors, backward compatibility
+  - 301 tests passing
+
+### v0.2.15
 - **Structured Error Categories + Observability** — typed error objects, per-call metadata, safe observability hooks
   - New `_categorize_error()` helper: auth_error, rate_limited, timeout, bad_request, network_error, empty_response
   - New `_build_call_metadata()` for structured per-call info

@@ -18,7 +18,7 @@ import re
 
 from scripts.config import load_config, get_scenario_config, normalize_tier
 from scripts.classifier import classify_query
-from scripts.panel import dispatch_panel
+from scripts.panel import dispatch_panel, _resolve_min_survivors
 from scripts.cleaner import clean_panel_responses
 from scripts.judge import judge_single_stage, judge_two_stage
 from scripts.output import format_for_chat, save_output
@@ -401,13 +401,14 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
     if deadline_check:
         return deadline_check
 
-    if survived < pipeline_cfg.get("min_survivors", 2):
+    min_survivors = _resolve_min_survivors(config, tier=normalized_tier)
+    if survived < min_survivors:
         if not graceful:
-            result["error"] = f"Not enough survivors ({survived} < minimum)"
+            result["error"] = f"Not enough survivors ({survived} < {min_survivors})"
             result["elapsed"] = time.monotonic() - start
             return _save(result)
         if verbose:
-            print(f"[pipeline] Not enough survivors ({survived}), using direct fallback...")
+            print(f"[pipeline] Not enough survivors ({survived} < {min_survivors}), using direct fallback...")
         direct_result = _apply_direct_fallback(result, "insufficient_survivors", query, config, deadline_timestamp=deadline_timestamp)
         if direct_result.get("success"):
             result["metadata"]["timing_ms"] = {
@@ -420,7 +421,7 @@ def run_pipeline(query, config_path=None, output_dir=None, verbose=False, tier=N
             return _save(result)
         # Fallback also failed — return early (was previously falling
         # through to judge with too few survivors).
-        result["error"] = f"Not enough survivors ({survived} < minimum), fallback also failed"
+        result["error"] = f"Not enough survivors ({survived} < {min_survivors}), fallback also failed"
         result["elapsed"] = time.monotonic() - start
         return _save(result)
 

@@ -808,6 +808,272 @@ class TestPanelQuorum(unittest.TestCase):
         bad_config = {"pipeline": {"min_survivors": "abc"}}
         self.assertEqual(_resolve_panel_quorum(bad_config, 5), 2)
 
+    def test_resolve_panel_quorum_with_quorum_by_tier(self):
+        """quorum_by_tier[tier] is used when configured."""
+        from scripts.panel import _resolve_panel_quorum
+
+        # quorum_by_tier.medium: 3, min_survivors: 2 → resolves to 3
+        config = {
+            "pipeline": {
+                "min_survivors": 2,
+                "quorum_by_tier": {"medium": 3, "high": 3},
+            },
+        }
+        self.assertEqual(_resolve_panel_quorum(config, 5, tier="medium"), 3)
+        self.assertEqual(_resolve_panel_quorum(config, 5, tier="high"), 3)
+
+        # quorum_by_tier.low2: 0 → returns 0 (explicitly disabled)
+        config = {
+            "pipeline": {
+                "min_survivors": 2,
+                "quorum_by_tier": {"low2": 0},
+            },
+        }
+        self.assertEqual(_resolve_panel_quorum(config, 4, tier="low2"), 0)
+
+        # Missing tier-specific key → falls back to min_survivors
+        config = {
+            "pipeline": {
+                "min_survivors": 3,
+                "quorum_by_tier": {"medium": 3},
+            },
+        }
+        self.assertEqual(_resolve_panel_quorum(config, 5, tier="unknown"), 3)
+
+        # quorum_by_tier.min_survivors > total_calls → clamped
+        config = {
+            "pipeline": {
+                "min_survivors": 2,
+                "quorum_by_tier": {"high": 9},
+            },
+        }
+        self.assertEqual(_resolve_panel_quorum(config, 3, tier="high"), 3)
+
+        # Invalid tier-specific value → fall back to valid min_survivors
+        config = {
+            "pipeline": {
+                "min_survivors": 2,
+                "quorum_by_tier": {"low1": "invalid", "medium": 3},
+            },
+        }
+        self.assertEqual(_resolve_panel_quorum(config, 5, tier="low1"), 2)
+
+        # Negative tier-specific value → fall back to min_survivors
+        config = {
+            "pipeline": {
+                "min_survivors": 2,
+                "quorum_by_tier": {"low1": -1},
+            },
+        }
+        self.assertEqual(_resolve_panel_quorum(config, 5, tier="low1"), 2)
+
+        # quorum_by_tier not a dict → fall back to min_survivors
+        config = {
+            "pipeline": {
+                "min_survivors": 3,
+                "quorum_by_tier": "not-a-dict",
+            },
+        }
+        self.assertEqual(_resolve_panel_quorum(config, 5, tier="medium"), 3)
+
+        # No tier passed → falls back to min_survivors
+        self.assertEqual(_resolve_panel_quorum(config, 5), 3)
+
+    def test_resolve_min_survivors_helper(self):
+        """_resolve_min_survivors computes correct values."""
+        from scripts.panel import _resolve_min_survivors
+
+        # min_survivors_by_tier.medium: 3 → returns 3
+        config = {
+            "pipeline": {
+                "min_survivors": 2,
+                "min_survivors_by_tier": {"low1": 2, "medium": 3, "high": 3},
+            },
+        }
+        self.assertEqual(_resolve_min_survivors(config, tier="medium"), 3)
+        self.assertEqual(_resolve_min_survivors(config, tier="high"), 3)
+        self.assertEqual(_resolve_min_survivors(config, tier="low1"), 2)
+
+        # Missing tier-specific key → falls back to min_survivors
+        self.assertEqual(_resolve_min_survivors(config, tier="unknown"), 2)
+
+        # No tier → falls back to min_survivors
+        self.assertEqual(_resolve_min_survivors(config), 2)
+
+        # None config → default 2
+        self.assertEqual(_resolve_min_survivors(None, tier="medium"), 2)
+        self.assertEqual(_resolve_min_survivors({}, tier="medium"), 2)
+
+        # Empty pipeline → default 2
+        self.assertEqual(_resolve_min_survivors({"pipeline": {}}, tier="medium"), 2)
+
+        # Negative min_survivors → default 2
+        config = {"pipeline": {"min_survivors": -1}}
+        self.assertEqual(_resolve_min_survivors(config, tier="medium"), 2)
+
+        # Invalid min_survivors type → default 2
+        config = {"pipeline": {"min_survivors": "abc"}}
+        self.assertEqual(_resolve_min_survivors(config, tier="medium"), 2)
+
+        # Invalid tier-specific value → fall back to min_survivors
+        config = {
+            "pipeline": {
+                "min_survivors": 3,
+                "min_survivors_by_tier": {"low1": "bad"},
+            },
+        }
+        self.assertEqual(_resolve_min_survivors(config, tier="low1"), 3)
+
+        # Negative tier-specific value → fall back to min_survivors
+        config = {
+            "pipeline": {
+                "min_survivors": 3,
+                "min_survivors_by_tier": {"low1": -5},
+            },
+        }
+        self.assertEqual(_resolve_min_survivors(config, tier="low1"), 3)
+
+        # min_survivors_by_tier not a dict → fall back to min_survivors
+        config = {
+            "pipeline": {
+                "min_survivors": 3,
+                "min_survivors_by_tier": "bad",
+            },
+        }
+        self.assertEqual(_resolve_min_survivors(config, tier="medium"), 3)
+
+    def test_medium_tier_quorum_waits_for_all_with_quorum_by_tier(self):
+        """medium tier with quorum_by_tier.medium:3 waits for all 3 responses."""
+        import time
+        from scripts.panel import dispatch_panel
+
+        config = self._make_config(min_survivors=2, max_workers=3)
+        config["pipeline"]["quorum_by_tier"] = {"medium": 3}
+        config["pipeline"]["min_survivors_by_tier"] = {"medium": 3}
+        # Use ``tiers`` key to avoid TIER_MAP adding extra models
+        config["default"]["panel"] = {
+            "tiers": {
+                "medium": [
+                    {"name": "test-custom-model", "count": 3},
+                ],
+            },
+            "model_defaults": {
+                "test-custom-model": {"temp": 0.75, "top_p": 0.9,
+                                      "max_completion_tokens": 100},
+            },
+        }
+
+        call_index = 0
+
+        def _slow_third(**kwargs):
+            nonlocal call_index
+            idx = call_index
+            call_index += 1
+            if idx == 2:  # third call is slow
+                time.sleep(0.3)
+            return self._fast_response()
+
+        with mock.patch("scripts.panel.call_llm_with_retry",
+                        side_effect=_slow_third):
+            result = dispatch_panel("test query", "general", config=config,
+                                    tier="medium", max_workers=3)
+
+        # All 3 responses collected (quorum=3 means wait for all)
+        self.assertEqual(len(result["responses"]), 3)
+        self.assertEqual(result["quorum"], 3)
+        self.assertTrue(result["quorum_reached"])
+        self.assertTrue(result["success"])
+
+    def test_low2_disables_early_quorum(self):
+        """low2 tier with quorum_by_tier.low2:0 collects all responses."""
+        from scripts.panel import dispatch_panel
+
+        config = self._make_config(min_survivors=3, max_workers=3)
+        config["pipeline"]["quorum_by_tier"] = {"low2": 0}
+        config["pipeline"]["min_survivors_by_tier"] = {"low2": 3}
+        # 4 calls to test collection of all
+        config["default"]["panel"] = {
+            "tiers": {
+                "low2": [
+                    {"name": "test-custom-model", "count": 4},
+                ],
+            },
+            "model_defaults": {
+                "test-custom-model": {"temp": 0.75, "top_p": 0.9,
+                                      "max_completion_tokens": 100},
+            },
+        }
+
+        with mock.patch("scripts.panel.call_llm_with_retry") as mock_call:
+            mock_call.return_value = self._fast_response()
+            result = dispatch_panel("test query", "general", config=config,
+                                    tier="low2", max_workers=3)
+
+        # All 4 responses collected (quorum=0 disables early exit)
+        self.assertEqual(len(result["responses"]), 4)
+        self.assertEqual(result["total_calls"], 4)
+        self.assertEqual(result["quorum"], 0)
+        self.assertFalse(result["quorum_reached"])
+        self.assertFalse(result["panel_calls_early_exit"])
+        self.assertTrue(result["success"], "All 4 succeed, min survivors is 3")
+
+    def test_tier_min_survivors_fails_raw_panel(self):
+        """Tier-specific min survivors causes raw panel failure when threshold not met."""
+        from scripts.panel import dispatch_panel
+
+        config = self._make_config(min_survivors=2, max_workers=3)
+        config["pipeline"]["quorum_by_tier"] = {"medium": 3}
+        config["pipeline"]["min_survivors_by_tier"] = {"medium": 3}
+        config["default"]["panel"] = {
+            "tiers": {
+                "medium": [
+                    {"name": "test-custom-model", "count": 3},
+                ],
+            },
+            "model_defaults": {
+                "test-custom-model": {"temp": 0.75, "top_p": 0.9,
+                                      "max_completion_tokens": 100},
+            },
+        }
+
+        # 2 successes + 1 failure → 2 < 3 (tier-specific min_survivors)
+        calls = [
+            self._fast_response(),     # success
+            self._fast_response(),     # success
+            self._failure_response(),  # failure
+        ]
+
+        with mock.patch("scripts.panel.call_llm_with_retry",
+                        side_effect=calls):
+            result = dispatch_panel("test query", "general", config=config,
+                                    tier="medium", max_workers=3)
+
+        # Panel fails because 2 succeeded < 3 min_survivors_by_tier.medium
+        self.assertFalse(result["success"])
+        # All 3 responses collected (quorum=3, wait for all)
+        self.assertEqual(len(result["responses"]), 3)
+
+    def test_quorum_backward_compatibility_no_new_keys(self):
+        """Existing tests without quorum_by_tier keys still work."""
+        from scripts.panel import _resolve_panel_quorum
+
+        # Config with only min_survivors (no quorum_by_tier)
+        config = {"pipeline": {"min_survivors": 2}}
+        self.assertEqual(_resolve_panel_quorum(config, 5, tier="medium"), 2)
+        self.assertEqual(_resolve_panel_quorum(config, 5, tier=None), 2)
+        self.assertEqual(_resolve_panel_quorum(config, 5), 2)
+
+        # Config with only min_survivors via _resolve_min_survivors
+        from scripts.panel import _resolve_min_survivors
+        self.assertEqual(_resolve_min_survivors(config, tier="medium"), 2)
+        self.assertEqual(_resolve_min_survivors(config, tier=None), 2)
+        self.assertEqual(_resolve_min_survivors(config), 2)
+
+        # Config with neither key → default 2
+        config = {}
+        self.assertEqual(_resolve_panel_quorum(config, 5, tier="medium"), 2)
+        self.assertEqual(_resolve_min_survivors(config, tier="medium"), 2)
+
 
 class TestCLITier(unittest.TestCase):
     """Test CLI --tier argument."""

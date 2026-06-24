@@ -150,12 +150,19 @@ def _build_call_specs(models_list, user_prompt, config):
     return call_specs
 
 
-def _resolve_panel_quorum(config, total_calls):
-    """Compute panel quorum from ``pipeline.min_survivors``, clamped to total_calls.
+def _resolve_panel_quorum(config, total_calls, tier=None):
+    """Compute panel quorum from config, clamped to total_calls.
 
     Quorum is the number of successful panel responses needed to early-exit.
-    Returns 0 when *total_calls* is 0 (no quorum needed — existing failure
-    behavior applies). Never raises.
+    Resolution order:
+      1. If ``tier`` is truthy and ``pipeline.quorum_by_tier[tier]`` is a
+         valid non-negative integer, use that value.
+      2. Otherwise use ``pipeline.min_survivors``.
+      3. Fall back to default ``2``.
+      If the resolved value is ``0``, early quorum is disabled.
+      The result is clamped to ``[0, total_calls]``.
+    Returns 0 when *total_calls* is 0 or not a positive integer.
+    Never raises.
 
     Parameters
     ----------
@@ -163,6 +170,9 @@ def _resolve_panel_quorum(config, total_calls):
         Full fusion config dict (may be None or empty).
     total_calls : int
         Number of submitted panel call specs.
+    tier : str or None
+        Panel tier (``low1``, ``low2``, ``low3``, ``medium``, ``high``,
+        or ``None`` for default).
 
     Returns
     -------
@@ -171,14 +181,79 @@ def _resolve_panel_quorum(config, total_calls):
     """
     if not isinstance(total_calls, int) or total_calls <= 0:
         return 0
-    if not config or not isinstance(config, dict):
-        min_survivors = 2
-    else:
-        min_survivors = config.get("pipeline", {}).get("min_survivors", 2)
-    if not isinstance(min_survivors, (int, float)) or min_survivors < 0:
-        min_survivors = 2
-    min_survivors = int(min_survivors)
-    return min(total_calls, min_survivors)
+    pipeline = {}
+    if config and isinstance(config, dict):
+        pipeline = config.get("pipeline", {}) or {}
+    if not isinstance(pipeline, dict):
+        pipeline = {}
+
+    value = None
+    # 1. Try quorum_by_tier[tier] when tier is truthy
+    if tier:
+        quorum_by_tier = pipeline.get("quorum_by_tier")
+        if isinstance(quorum_by_tier, dict):
+            tier_val = quorum_by_tier.get(tier)
+            if tier_val is not None and isinstance(tier_val, (int, float)) and tier_val >= 0:
+                value = int(tier_val)
+
+    # 2. Fall back to min_survivors
+    if value is None:
+        raw = pipeline.get("min_survivors", 2)
+        if isinstance(raw, (int, float)) and raw >= 0:
+            value = int(raw)
+        else:
+            value = 2
+
+    # 3. value is guaranteed int >= 0 here
+    if value == 0:
+        return 0
+    return min(total_calls, value)
+
+
+def _resolve_min_survivors(config, tier=None):
+    """Compute minimum successful survivors from config.
+
+    Resolution order:
+      1. If ``tier`` is truthy and ``pipeline.min_survivors_by_tier[tier]``
+         is a valid non-negative integer, use that value.
+      2. Fall back to ``pipeline.min_survivors``.
+      3. Fall back to default ``2``.
+      Invalid/non-numeric/negative values are treated the same as missing.
+
+    Parameters
+    ----------
+    config : dict or None
+        Full fusion config dict (may be None or empty).
+    tier : str or None
+        Panel tier.
+
+    Returns
+    -------
+    int
+        Minimum number of successful survivors required.
+    Never raises.
+    """
+    pipeline = {}
+    if config and isinstance(config, dict):
+        pipeline = config.get("pipeline", {}) or {}
+    if not isinstance(pipeline, dict):
+        pipeline = {}
+
+    # 1. Try min_survivors_by_tier[tier] when tier is truthy
+    if tier:
+        by_tier = pipeline.get("min_survivors_by_tier")
+        if isinstance(by_tier, dict):
+            tier_val = by_tier.get(tier)
+            if tier_val is not None and isinstance(tier_val, (int, float)) and tier_val >= 0:
+                return int(tier_val)
+
+    # 2. Fall back to min_survivors
+    raw = pipeline.get("min_survivors", 2)
+    if isinstance(raw, (int, float)) and raw >= 0:
+        return int(raw)
+
+    # 3. Default
+    return 2
 
 
 def dispatch_panel(query, scenario_id, config=None, max_workers=None, tier=None, progress_callback=None, deadline_timestamp=None):
@@ -376,7 +451,7 @@ def dispatch_panel(query, scenario_id, config=None, max_workers=None, tier=None,
             }
 
     total = len(call_specs)
-    quorum = _resolve_panel_quorum(config, total)
+    quorum = _resolve_panel_quorum(config, total, tier=tier)
     result["total_calls"] = total
     result["quorum"] = quorum
 
@@ -498,9 +573,9 @@ def dispatch_panel(query, scenario_id, config=None, max_workers=None, tier=None,
     result["http_statuses"] = http_statuses if http_statuses else None
     result["usage_totals"] = usage_totals
 
-    # Check if enough responses survived
+    # Check if enough responses survived — use tier-specific min survivors
     succeeded = sum(1 for r in result["responses"] if r.get("success"))
-    min_survivors = config.get("pipeline", {}).get("min_survivors", 2)
+    min_survivors = _resolve_min_survivors(config, tier=tier)
     if succeeded < min_survivors:
         result["success"] = False
 

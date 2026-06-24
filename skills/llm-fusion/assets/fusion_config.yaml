@@ -255,6 +255,18 @@ fusion:
     default_tier: medium
     max_panel_workers: 6
     min_survivors: 2
+    quorum_by_tier:
+      low1: 2
+      low2: 0
+      low3: 0
+      medium: 3
+      high: 3
+    min_survivors_by_tier:
+      low1: 2
+      low2: 3
+      low3: 5
+      medium: 3
+      high: 3
     soft_deadline_seconds: 300
     graceful_degradation: true
     express_qa:
