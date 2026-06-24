@@ -29,52 +29,51 @@ Then in chat (see following examples).
 ---
 
 
-## Example (Explain Something to a 5-yo)
+## Example (Tier Progression)
 
 ```bash
 llm-fusion: Explain Numerai's stake-weighted meta-model to a 5-yo in 5 lines
 ```
 
+### low2 — 4 calls (2× deepseek-v4-flash + 2× mimo-v2.5) · 13.2s
+
+> Numerai is like a game where everyone guesses where a hidden treasure is. You place your own toys on your guess to show you really believe it. The more toys you place, the more your guess matters in the final group answer. This makes the group's super-guess get smarter and smarter over time.
+
+### low3 — 6 calls (3× deepseek-v4-flash + 3× mimo-v2.5) · 20.9s
+
+> Imagine lots of kids each guessing where a ball will land. The kids who bet more of their own allowance on their guess get listened to more. Numerai combines all the guesses together, but trusts the ones with bigger bets more. This makes one super-smart final guess that helps decide what to buy and sell. It works best because everyone has a reason to try their hardest.
+
+### medium — 3 calls (deepseek-v4-flash + mimo-v2.5 + deepseek-v4-pro) · 15.2s
+
+> Imagine many friends guessing together in a game. Each friend puts some of their own marbles at risk on their guess. Friends who risk more marbles get a louder voice when we listen. We combine everyone's guesses, giving extra weight to the big-stake voices. This creates one super-smart final guess that helps everyone win.
+
+### high — 3 calls (deepseek-v4-pro + minimax-m3 + qwen3.7-plus) · 46.1s
+
 **Panel responses**:
 
-- deepseek-v4-flash (416 tokens, 358 reasoning)
+- deepseek-v4-pro (1208 tokens, 987 reasoning)
 
-  > Numerai is a game where people guess how stocks will move.
-  > The meta-model combines everyone's guesses into one smart guess.
-  > But people who have more stake (like points or tokens) get more say in that combined guess.
-  > This rewards good guesses and helps the whole team win.
+  > Lots of people make guesses about which stocks will go up. They can bet digital coins on their own guesses to show how sure they are. Numerai mixes all guesses into one super guess, but follows the big bettors more closely. That way, the super guess is usually better because it listens to the most confident people.
 
-- mimo-v2.5 (110 tokens, 22 reasoning)
+- minimax-m3 (406 tokens, 0 reasoning)
 
-  > Numerai is a game where lots of people try to guess how the stock market will move.
-  > Each person puts their own money on their guesses to show they're really confident.
-  > A smart computer then listens to everyone's guesses but trusts the people who put more money more.
-  > It mixes all those guesses together into one super-smart prediction, like picking the best parts of every kid's crayon drawing to make one awesome picture.
+  > Imagine lots of friends guessing which cookies are yummy. 🍪 Numerai mixes everyone's guesses together to make one super-guess, but listens more to friends who put their own toys on the line when they guess. So people who are more sure (and bet more) get their guesses to count more. It's like the teacher's guess, but made from everyone, weighted by how brave they were! 🌟
 
+- qwen3.7-plus (1921 tokens, 1755 reasoning)
 
-- deepseek-v4-pro (577 tokens, 494 reasoning)
+  > Imagine a giant game where everyone bets their toys on who can guess the weather best. The computer combines all these guesses to make one super smart prediction, but it only listens to the friends who risked the most of their own toys! This makes sure the final answer comes from the bravest and most confident guessers, keeping the game fair and fun for everyone.
 
-  > Think of Numerai as a big guessing game where lots of people try to predict the future.
-  > Each player bets their own special coins on how sure they are about their guess.
-  > The final guess is a blend of everyone's guesses, but guesses with more coins bet count more.
-  > This way, players are careful because they can lose their coins if they're wrong, and win more if they're right.
+**Judge synthesis** (mimo-v2.5, single-stage, 914 tokens, 281 reasoning):
 
+> Imagine a giant guessing game where kids bet their favorite toys to show how sure they are. Everyone makes a secret guess, and a smart computer mixes all the guesses together. The computer pays extra attention to the kids who bet the most toys, because they're really confident. This creates one super-smart guess that's usually right, because it learns from the bravest players. It's like making the best team guess by trusting the friends who put their money where their mouth is!
 
-**Judge synthesis**:
+Panel: 3/3 ok in 39.4s | Judge: single-stage in 6.7s | Total: 46.1s
 
-Judge synthesis (mimo-v2.5, single-stage, 333 tokens, 210 reasoning) blended all responses into the final answer with the special coins + best parts of every picture analogy — drawing from deepseek-v4-pro's "special coins" and mimo-v2.5's "crayon drawing" theme.
+### What changes across tiers
 
-**Final Answer**:
-
-  > Numerai is like a big stock-picking game where lots of people guess how the market will move.
-  > Each player bets their own special coins to show how sure they are about their guess.
-  > The game's smart computer makes a final guess by listening to everyone — but gives more importance to guesses from people who bet more coins.
-  > This helps everyone try to guess carefully, because good guesses can win you more coins, and bad ones lose them.
-  > By mixing all the guesses this way, the final prediction becomes extra smart — like taking the best parts of every picture to make one great drawing.
-
-**Stats**:
-
-Panel: 3/3 ok in 14s | Judge: single-stage in 14s | Total: 42s
+- **Same models, more calls (low2 → low3):** flash + mimo at both, but 6 calls gives more diversity from the same voices — you get richer detail at the cost of 8s more
+- **New model diversity (medium):** swaps one flash for deepseek-v4-pro, adding a reasoning-heavy voice — fewer calls than low2 but faster (15.2s vs 13.2s) because pro answers in parallel
+- **Three model families (high):** each panel response brings a distinct analogy style — digital coins (deepseek), cookies + emoji (minimax), toys + weather (qwen) — judge picks the strongest elements from each
 
 
 ---
